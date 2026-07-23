@@ -21,7 +21,17 @@ import { distance as measureDistance, angle as measureAngle } from "./measure.js
  */
 const MODEL_VARIANT = "full-f16";
 const MODEL_DIR = `${location.origin}/models/ani2x`;
-const FIRE_OPTIONS = { forceTolerance: 0.02, maxSteps: 400, dtMax: 0.3 };
+// Convergence must be tight enough that floppy near-linear/planar modes reach
+// their symmetric geometry: acetylene's bending potential is so shallow that a
+// 0.02 Ha/A tolerance "converges" with a visible ~5 deg kink (measured 174.6
+// deg), 1e-3 leaves ~0.5 deg, and 5e-4 restores 179.8+ deg. Small molecules get
+// the tight value (cheap, and high-symmetry artifacts show most there); large
+// ones get 1e-3 to stay interactive (43 atoms ~= 75 s as-is).
+const fireOptions = (atomCount: number) => ({
+  forceTolerance: atomCount <= 30 ? 5e-4 : 1e-3,
+  maxSteps: 1200,
+  dtMax: 0.3,
+});
 const PERTURB_MAX = 0.2; // Angstrom, max per-component displacement seed
 /** Max atom count for the multi-seed conformer search; larger -> single seed. */
 const EMBED_MAX_ATOMS = 30;
@@ -763,7 +773,7 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     refreshVibButton();
     if (msg.converged) {
       setStatus(
-        `relaxed (maxF < 0.02) — E = ${msg.energy.toFixed(4)} Ha in ${msg.elapsedMs.toFixed(0)} ms`,
+        `relaxed (maxF < ${fireOptions(symbols.length).forceTolerance}) — E = ${msg.energy.toFixed(4)} Ha in ${msg.elapsedMs.toFixed(0)} ms`,
         "good",
       );
     } else {
@@ -877,7 +887,7 @@ function optimize(opts: { embedding?: boolean } = {}): void {
     type: "optimize",
     symbols,
     positions: Array.from(currentPositions),
-    options: FIRE_OPTIONS,
+    options: fireOptions(symbols.length),
   });
 }
 
@@ -900,7 +910,7 @@ function embed(embedSymbols: string[], base: ArrayLike<number>, bonds: readonly 
     symbols: embedSymbols,
     seeds,
     bonds: bonds.map((b) => ({ i: b.i, j: b.j, order: b.order })),
-    options: FIRE_OPTIONS,
+    options: fireOptions(embedSymbols.length),
   });
 }
 
