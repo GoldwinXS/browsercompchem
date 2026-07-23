@@ -1,106 +1,129 @@
 # BrowserCompChem
 
-A fully client-side computational chemistry workbench -- a browser-native
-successor to desktop tools like WebMO. There is no backend: sketching,
-geometry optimization, force-field and ML-potential energy/force
-evaluation, and orbital calculations all happen in the browser tab, using
-WebAssembly (RDKit-JS) and WebGPU (ONNX Runtime Web) for the compute-heavy
-parts, and a hybrid ray-traced three.js renderer for visualization. Nothing
-here is a toy demo of "chemistry-flavored 3D graphics" -- the goal is real
-energies and forces, checked against literature values at every stage,
-with the checking apparatus (the bench package) treated as a first-class,
-permanent part of the project rather than a one-off validation script.
+**Live: https://goldwinxs.github.io/browsercompchem/** — works on desktop and phone, no install, no server, no account. Nothing leaves your browser tab.
 
-The strategy is to build the compute engine as a standalone, dependency-light
-npm package first, and let a demo UI and a public benchmark page consume it
-as a library -- so the same code that proves out an optimizer or a new
-potential in a unit test is exactly the code a user's browser tab runs.
-Correctness work (does this method reproduce known dimer/cluster minima?
-does this ML potential's energy error stay under 1 kcal/mol against a
-CCSD(T) reference set?) is meant to stay visible and public indefinitely,
-not be a milestone that gets deleted once the "real" product ships.
+A fully client-side computational chemistry workbench — a browser-native
+successor to tools like WebMO. Sketch or paste a molecule, optimize its
+geometry with a machine-learned potential, animate its normal modes, simulate
+its IR spectrum, and render its molecular orbitals as 3D isosurfaces — all of
+it computed in the tab, most of it in a couple of seconds.
 
-## Architecture: three compute tiers
+This is not chemistry-flavored 3D graphics. Every numerical claim in the app
+is either validated against literature or explicitly labeled as qualitative,
+and the checking apparatus is a permanent, versioned part of the repository.
+
+## What it does
+
+- **SMILES / structure sketching to 3D** — RDKit (WebAssembly) parses SMILES or
+  a JSME-sketched structure and supplies the real bond topology. A built-in
+  topology-aware 3D embedder (distance-geometry-style classical force field,
+  multi-start with a validity gate) produces an untangled starting geometry
+  for any size of molecule, which the ML potential then refines.
+- **Geometry optimization** — a pure-TypeScript reimplementation of the
+  **ANI-2x** neural network potential (elements H, C, N, O, F, S, Cl; neutral,
+  closed-shell molecules) with analytic forces, relaxed by a from-scratch FIRE
+  optimizer. Energies and forces are gated in CI against TorchANI, the
+  reference implementation, at 1e-5 Ha / 1e-4 Ha/A on real molecules
+  (cholesterol, a peptide, aspirin, caffeine).
+- **Vibrations** — finite-difference Hessian on the ANI surface, harmonic
+  frequencies with translation/rotation projected out, animated normal modes.
+  Test-gated against gas-phase literature values for water and CO2.
+- **IR spectra** — per-mode intensities from finite-differenced dipole
+  derivatives, rendered as a Lorentzian-broadened spectrum. The symmetry
+  selection rules come out exactly: CO2's symmetric stretch computes IR-silent
+  while the antisymmetric stretch dominates, and that behavior is a hard test.
+- **Molecular orbitals** — an extended Hückel tier (Hoffmann parameters,
+  Wolfsberg–Helmholz, Löwdin orthogonalization) with marching-cubes isosurface
+  rendering, full MO ladder, HOMO/LUMO frontier panel, Mulliken populations
+  and partial charges. Benzene's doubly degenerate e1g HOMO and water's
+  1b1 > 3a1 > 1b2 ordering reproduce as they should.
+- **Measurement** — click through atoms for distances, angles, and dihedrals.
+- **Rendering** — three.js with an optional real-time hybrid ray tracer
+  ([three-realtime-rt](https://www.npmjs.com/package/three-realtime-rt)).
+- **Phone-usable UI** — draggable bottom sheet, finger-sized controls.
+
+## What it deliberately does not claim
+
+The app labels its own accuracy tiers in the UI, and the same honesty applies
+here:
+
+- ANI-2x geometries and frequencies are **DFT-adjacent** (the network is
+  trained to reproduce wB97X DFT; published benchmarks put it within roughly
+  1–2 kcal/mol on its domain). They are not CCSD(T), and the domain is
+  neutral closed-shell organics near equilibrium — no ions, radicals, metals,
+  transition states, reactions, or solvent.
+- Extended Hückel orbital **energies are qualitative**. Orderings,
+  degeneracies, symmetries, and nodal structure are trustworthy; absolute eV
+  are not (EHT systematically overbinds vs. photoelectron ionization energies
+  by ~3.5–4 eV, and the UI says so).
+- IR **intensities and the dipole are qualitative** (Mulliken point-charge
+  model — the band pattern and symmetry zeros are right; absolute km/mol and
+  Debye run high, and the UI says so).
+
+`docs/LITERATURE_VALIDATION.md` collects the experimental reference values
+(NIST CCCBDB / WebBook, primary PES and spectroscopy literature, with
+citations) used to check the app, plus notes on how to validate this class of
+method honestly.
+
+## Architecture
 
 ```
-                      +-------------------------------------------+
-                      |                three.js scene              |
-                      |     (three-realtime-rt hybrid ray tracer)  |
-                      +-------------------------------------------+
-                                     ^ molecule / trajectory
-                                     |
-      +------------------+  +------------------------+  +------------------------+
-      |   TIER 1: INSTANT |  | TIER 2: ML ACCURACY    |  | TIER 3: ORBITALS       |
-      |   RDKit-JS (WASM) |  | onnxruntime-web/WebGPU |  | extended Hueckel (->HF)|
-      |                   |  |                        |  |                       |
-      | sketch -> 3D      |  | ML interatomic         |  | frontier orbitals,    |
-      | conformer embed   |  | potentials (energy +   |  | HOMO/LUMO, qualitative|
-      | MMFF/UFF force    |  | forces), e.g. ANI-2x-  |  | electronic structure  |
-      | field relax       |  | style networks         |  |                       |
-      +--------+----------+  +-----------+------------+  +-----------+------------+
-               |                          |                           |
-               +--------------------------+---------------------------+
-                                     |
-                       +-------------------------------+
-                       |      packages/engine           |
-                       |  geometry (Molecule)            |
-                       |  potentials (EnergyForceProvider)|
-                       |  optimize   (FIRE, BFGS*)        |
-                       |  hessian    (finite difference*) |
-                       |  orbitals   (extended Hueckel*)  |
-                       +-------------------------------+
-                                     |
-                       +-------------------------------+
-                       |      packages/bench             |
-                       |  dataset schema + citations      |
-                       |  MAE / RMSE / max error stats     |
-                       |  runs any tier against literature |
-                       +-------------------------------+
-
-  (* = documented skeleton in this scaffold, not yet implemented; FIRE +
-       Lennard-Jones are the one real, tested, end-to-end path today)
+                    +-------------------------------------------+
+                    |            three.js scene                  |
+                    |   (optional three-realtime-rt ray tracer)  |
+                    +-------------------------------------------+
+                                   ^
+                                   |
+    +--------------------+  +----------------------+  +----------------------+
+    | TIER 1: TOPOLOGY   |  | TIER 2: ML ACCURACY  |  | TIER 3: ELECTRONS    |
+    | RDKit-JS (WASM)    |  | ANI-2x, pure TS      |  | extended Hueckel     |
+    | SMILES/sketch,     |  | energies + analytic  |  | MOs, isosurfaces,    |
+    | bonds, embed3d     |  | forces, FIRE relax   |  | Mulliken, dipole, IR |
+    +---------+----------+  +----------+-----------+  +----------+-----------+
+              |                        |                         |
+              +------------------------+-------------------------+
+                                   |
+                     +--------------------------------+
+                     |        packages/engine          |
+                     |  geometry, potentials (ANI-2x), |
+                     |  optimize (FIRE), vibrations,   |
+                     |  orbitals (EHT), spectra (IR),  |
+                     |  embed3d, isosurface            |
+                     +--------------------------------+
 ```
 
-Every tier reduces to the same seam: `EnergyForceProvider.energyForces(molecule)
--> {energy, forces}`. The optimizer, hessian, and bench packages are written
-against that interface, not against RDKit, ONNX, or any particular method --
-so a new potential (a different ML model, a real Hueckel-derived tier, a
-future ab initio method) plugs in without touching the rest of the stack.
+Everything reduces to one seam — `EnergyForceProvider.energyForces(molecule)`
+— so the optimizer, Hessian, and benches are written against an interface,
+not against any particular method. (An ONNX Runtime / WebGPU inference path
+was prototyped and deliberately rejected; `spike/ani2x-onnx/RESULTS.md`
+documents why the pure-TypeScript implementation won.)
 
-## Roadmap
+## Verification
 
-The project is staged deliberately from "provably correct" outward, rather
-than "impressive demo" inward:
-
-1. **Test bench** (current stage) -- prove the engine's primitives are
-   correct against known analytic/literature results (LJ cluster minima
-   today; RDKit-JS force-field energies, then ML-potential energies against
-   a curated CCSD(T)/experimental reference set, next). The bench UI is a
-   permanent public artifact, not a phase-1-only checkbox.
-2. **Teaching tool** -- an interactive UI good enough to use in a classroom:
-   sketch a molecule, watch it relax, see orbitals populate, compare force
-   fields vs. ML potentials vs. (eventually) real ab initio side by side.
-3. **Useful tool** -- fast enough, accurate enough, and featureful enough
-   (conformer search, IR/Raman-adjacent vibrational analysis, reaction
-   coordinate scans) that someone doing real work reaches for it instead of
-   a desktop package.
-4. **Infrastructure** -- the engine package is stable and general enough
-   that other browser-based chemistry tools build on it rather than
-   reimplementing the same primitives.
+- `npm test -w packages/engine` — 52 tests: TorchANI parity gates, analytic
+  gradients vs. Romberg finite differences, literature-anchored vibrational
+  frequencies, EHT orbital orderings/degeneracies, IR selection rules,
+  embedder geometry gates (benzene planar and hexagonal, acetylene linear,
+  large molecules untangled), classical force-field gradient vs. finite
+  difference.
+- `npm test -w apps/demo` — UI-side unit tests.
+- `npm run fuzz -w apps/demo` — a seeded state-fuzz bench that drives the
+  running app through randomized interleaved user actions (switch molecules
+  mid-computation, etc.) and asserts state invariants after every action.
 
 ## Repo layout
 
 ```
 packages/
-  engine/   core library: geometry, potentials, optimize, hessian, orbitals
-  bench/    benchmark harness: EnergyForceProvider + dataset -> error stats
+  engine/     core library: geometry, ANI-2x, FIRE, vibrations, spectra,
+              orbitals, embed3d, isosurface
+  bench/      benchmark harness: EnergyForceProvider + dataset -> error stats
 apps/
-  demo/     Vite app; renders a hardcoded caffeine molecule via three-realtime-rt
-models/     ONNX model weights land here (not covered by .gitignore, see models/README.md)
-spike/      exploratory work by a different agent -- not touched by this scaffold
-bench-data/ curated literature reference datasets, being assembled separately --
-            not present/read yet; packages/bench/README.md documents the schema
-            it should eventually conform to
+  demo/       the Vite app deployed to GitHub Pages
+models/       ANI-2x weights (git-tracked deliberately; see models/README.md)
+bench-data/   curated literature reference data + citations
+docs/         LITERATURE_VALIDATION.md — cited experimental reference values
+spike/        archived ONNX-runtime exploration (kept for the negative result)
 ```
 
 ## Dev setup
@@ -108,17 +131,7 @@ bench-data/ curated literature reference datasets, being assembled separately --
 Requires Node >= 22 (npm workspaces).
 
 ```bash
-npm install          # installs all three workspace packages
-npm test             # runs vitest in packages/engine and packages/bench
-npm run build        # builds packages/engine and packages/bench to dist/
-npm run dev          # starts the Vite dev server for apps/demo
+npm install
+npm test             # engine + bench tests
+npm run dev          # Vite dev server for apps/demo
 ```
-
-`packages/engine`'s tests are the thing to trust first: a from-scratch FIRE
-optimizer relaxing a Lennard-Jones dimer to its analytic minimum
-(r = 2^(1/6) sigma) and a 7-atom LJ cluster to within a small tolerance of
-the published Cambridge Cluster Database global minimum energy
-(E = -16.505384 epsilon). Everything else in the engine (BFGS, finite-
-difference Hessian, extended Hueckel) is presently a documented interface
-stub -- see the doc comments in each module under `packages/engine/src/` for
-the intended design before implementing it.
