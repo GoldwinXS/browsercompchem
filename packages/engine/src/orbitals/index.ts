@@ -28,3 +28,9 @@ export {
   autoGridSpec,
   type GridSpec,
 } from "./grid.js";
+export {
+  mullikenCharges,
+  orbitalComposition,
+  type MullikenResult,
+  type AoContribution,
+} from "./population.js";

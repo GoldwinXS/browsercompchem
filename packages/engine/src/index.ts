@@ -73,6 +73,12 @@ export {
   autoGridSpec,
   type GridSpec,
 } from "./orbitals/grid.js";
+export {
+  mullikenCharges,
+  orbitalComposition,
+  type MullikenResult,
+  type AoContribution,
+} from "./orbitals/population.js";
 
 // isosurface (marching cubes for orbital lobes)
 export {
