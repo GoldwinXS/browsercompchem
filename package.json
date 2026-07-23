@@ -1,0 +1,22 @@
+{
+  "name": "browser-comp-chem",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Fully client-side computational chemistry workbench (browser-native WebMO successor).",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=packages/engine --workspace=packages/bench --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "dev": "npm run dev --workspace=apps/demo",
+    "lint": "tsc --build --dry"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}

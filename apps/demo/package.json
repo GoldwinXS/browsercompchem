@@ -1,0 +1,22 @@
+{
+  "name": "@browser-comp-chem/demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@browser-comp-chem/engine": "*",
+    "three": "^0.169.0",
+    "three-realtime-rt": "0.6.0",
+    "three-mesh-bvh": "^0.8.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vite": "^5.4.6",
+    "@types/three": "^0.169.0"
+  }
+}

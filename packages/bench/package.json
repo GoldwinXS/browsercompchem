@@ -1,0 +1,29 @@
+{
+  "name": "@browser-comp-chem/bench",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Benchmark harness: run an EnergyForceProvider against a reference dataset and produce error statistics.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@browser-comp-chem/engine": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  }
+}

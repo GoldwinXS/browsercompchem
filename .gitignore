@@ -1,0 +1,27 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+build/
+*.tsbuildinfo
+
+# python (spike/ scripts may use venvs)
+.venv/
+__pycache__/
+
+# editor / OS
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+
+# logs
+npm-debug.log*
+*.log
+
+# NOTE: large trained model artifacts (*.onnx, weights, etc.) are
+# intentionally NOT ignored here. They belong in the models/ directory
+# (see models/README.md) and are tracked deliberately -- do not add a
+# blanket "*.onnx" ignore rule without discussing storage strategy
+# (Git LFS / release assets) first.
