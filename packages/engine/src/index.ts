@@ -5,6 +5,13 @@ export { atomCount, distance, cloneMolecule } from "./geometry/molecule.js";
 // potentials
 export type { EnergyForceProvider, EnergyForces } from "./potentials/types.js";
 export { LennardJonesProvider, type LennardJonesParams } from "./potentials/lennardJones.js";
+export {
+  Ani2xProvider,
+  Ani2xModel,
+  type Ani2xLoadOptions,
+  AevComputer,
+  type AevParams,
+} from "./potentials/ani2x/index.js";
 
 // optimize
 export type {
