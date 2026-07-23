@@ -17,7 +17,8 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "accuracy": "vite-node --config vitest.config.ts src/accuracy/run.ts"
   },
   "dependencies": {
     "@browser-comp-chem/engine": "*"

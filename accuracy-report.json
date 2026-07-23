@@ -1,0 +1,1026 @@
+{
+  "generatedAt": "2026-07-23T04:30:58.420Z",
+  "model": "ani2x-full-f32",
+  "chemicalAccuracyKcalMol": 1,
+  "conformers": {
+    "results": [
+      {
+        "id": "butane_gauche_anti",
+        "molecule": "n-butane",
+        "status": "evaluated",
+        "predictedKcal": 0.5489664037035242,
+        "referenceKcal": 0.611,
+        "signedErrorKcal": -0.06203359629647576,
+        "absErrorKcal": 0.06203359629647576,
+        "refConformerMaxForce": 0.00008684284516681864,
+        "confConformerMaxForce": 0.00009505245172856987,
+        "refConformerFinalDeg": 179.99999023692706,
+        "confConformerFinalDeg": 64.81445585001572,
+        "stationary": true,
+        "energyType": "electronic (no ZPE), CCSD(T)/CBS (W1h) limit",
+        "levelOfTheory": "CCSD(T) extrapolated to basis-set limit (W1h)",
+        "uncertaintyKcal": 0.05,
+        "citation": {
+          "source": "Gruzman, D.; Karton, A.; Martin, J. M. L. Performance of Ab Initio and Density Functional Methods for Conformational Equilibria of C_nH_2n+2 Alkane Isomers (n=4-8). J. Phys. Chem. A 2009, 113, 11974-11983.",
+          "reference": "10.1021/jp903640h",
+          "level": "CCSD(T) extrapolated to basis-set limit (W1h)"
+        }
+      },
+      {
+        "id": "ethanol_gauche_trans",
+        "molecule": "ethanol",
+        "status": "evaluated",
+        "predictedKcal": -0.10578668347458317,
+        "referenceKcal": 0.12,
+        "signedErrorKcal": -0.22578668347458317,
+        "absErrorKcal": 0.22578668347458317,
+        "refConformerMaxForce": 0.00008747824771482282,
+        "confConformerMaxForce": 0.00009550257766574431,
+        "refConformerFinalDeg": 179.8526519044119,
+        "confConformerFinalDeg": 64.64787863391027,
+        "stationary": true,
+        "energyType": "effective 0 K gap (~42 cm^-1); CCSD(T) electronic + spectroscopy",
+        "levelOfTheory": "CCSD(T)/aug-cc-pVQZ and CCSD(T) PES; consistent with microwave/far-IR",
+        "uncertaintyKcal": 0.02,
+        "citation": {
+          "source": "Kahn, K.; Bruice, T. C. Focal-point energies and the anti/gauche conformers of ethanol; and Boussessi, R. et al. Small Alcohols Revisited: CCSD(T) Relative Potential Energies. ACS Omega 2017, 2, 8834.",
+          "reference": "10.1021/acsomega.7b01367",
+          "level": "CCSD(T)/aug-cc-pVQZ and CCSD(T) PES; consistent with microwave/far-IR"
+        },
+        "note": "SIGN MISMATCH vs reference ordering"
+      },
+      {
+        "id": "glycine_II_I",
+        "molecule": "glycine (conformer II relative to conformer I)",
+        "status": "not_evaluated",
+        "referenceKcal": 1.4,
+        "energyType": "relative energy (correlated ab initio, ~ZPE-inclusive; microwave-relevant)",
+        "levelOfTheory": "MP2/MP4/CCSD(T) large-basis (Csaszar 1992) and focal-point analysis (2009)",
+        "uncertaintyKcal": 0.4,
+        "citation": {
+          "source": "Csaszar, A. G. Conformers of Gaseous Glycine. J. Am. Chem. Soc. 1992, 114, 9568-9575; and focal-point analysis, Chem. Phys. Lett. 2009, 477, 176.",
+          "reference": "10.1021/ja00050a041",
+          "level": "MP2/MP4/CCSD(T) large-basis (Csaszar 1992) and focal-point analysis (2009)"
+        },
+        "note": "Not yet evaluated: differs from the reference conformer by several coupled torsions / H-bonding patterns with no second-conformer geometry in bench-data. Constructing it by hand would be a guess (see bench-data caveat on level-sensitive sub-kcal orderings)."
+      },
+      {
+        "id": "cysteine_II_I",
+        "molecule": "L-cysteine (conformer II relative to conformer I)",
+        "status": "not_evaluated",
+        "referenceKcal": 1.53,
+        "energyType": "electronic + corrections (equilibrium relative energy) at CCSD(T)-F12 benchmark",
+        "levelOfTheory": "CCSD(T)-F12b/cc-pVQZ-F12 with core-correlation, relativistic, and post-triples corrections",
+        "uncertaintyKcal": 0.1,
+        "citation": {
+          "source": "Benchmark Ab Initio Determination of the Conformers, Proton Affinities, and Gas-Phase Basicities of Cysteine. J. Phys. Chem. A 2022, 126, 9781.",
+          "reference": "10.1021/acs.jpca.2c07035",
+          "level": "CCSD(T)-F12b/cc-pVQZ-F12 with core-correlation, relativistic, and post-triples corrections"
+        },
+        "note": "Not yet evaluated: differs from the reference conformer by several coupled torsions / H-bonding patterns with no second-conformer geometry in bench-data. Constructing it by hand would be a guess (see bench-data caveat on level-sensitive sub-kcal orderings)."
+      },
+      {
+        "id": "cysteine_III_I",
+        "molecule": "L-cysteine (conformer III relative to conformer I)",
+        "status": "not_evaluated",
+        "referenceKcal": 1.6,
+        "energyType": "electronic + corrections (equilibrium relative energy) at CCSD(T)-F12 benchmark",
+        "levelOfTheory": "CCSD(T)-F12b/cc-pVQZ-F12 with core-correlation, relativistic, and post-triples corrections",
+        "uncertaintyKcal": 0.1,
+        "citation": {
+          "source": "Benchmark Ab Initio Determination of the Conformers, Proton Affinities, and Gas-Phase Basicities of Cysteine. J. Phys. Chem. A 2022, 126, 9781.",
+          "reference": "10.1021/acs.jpca.2c07035",
+          "level": "CCSD(T)-F12b/cc-pVQZ-F12 with core-correlation, relativistic, and post-triples corrections"
+        },
+        "note": "Not yet evaluated: differs from the reference conformer by several coupled torsions / H-bonding patterns with no second-conformer geometry in bench-data. Constructing it by hand would be a guess (see bench-data caveat on level-sensitive sub-kcal orderings)."
+      }
+    ],
+    "stats": {
+      "n": 2,
+      "mae": 0.14391013988552948,
+      "rmse": 0.16557142492580917,
+      "max": 0.22578668347458317
+    },
+    "unit": "kcal/mol",
+    "chemicalAccuracyKcal": 1
+  },
+  "frequencies": {
+    "results": [
+      {
+        "id": "water",
+        "name": "Water",
+        "status": "evaluated",
+        "linear": false,
+        "stationary": true,
+        "maxForce": 0.00007878192559145807,
+        "maxResidualTransRot": 27.45227518637822,
+        "nModes": 3,
+        "harmonic": [
+          1721.2,
+          3815.1,
+          3934.4
+        ],
+        "scaled": [
+          1652.4,
+          3662.5,
+          3777.1
+        ],
+        "experimental": [
+          1595,
+          3657,
+          3756
+        ],
+        "maeRaw": 154.24232971382176,
+        "rmseRaw": 155.73102819562064,
+        "maxRaw": 178.42817085028628,
+        "meanPctRaw": 5.662302449401206,
+        "maeScaled": 27.965969858602193,
+        "rmseScaled": 35.42809868129254,
+        "maxScaled": 57.37954784934186,
+        "meanPctScaled": 1.4358103514251563,
+        "citation": {
+          "source": "NIST CCCBDB experimental / Shimanouchi NSRDS-NBS 39",
+          "reference": "https://cccbdb.nist.gov/exp2x.asp?casno=7732185",
+          "level": "experimental fundamental vibrational frequencies"
+        }
+      },
+      {
+        "id": "carbon_dioxide",
+        "name": "Carbon dioxide",
+        "status": "evaluated",
+        "linear": true,
+        "stationary": true,
+        "maxForce": 0.0000957869504969941,
+        "maxResidualTransRot": 6.1181665616195735,
+        "nModes": 4,
+        "harmonic": [
+          645.5,
+          645.5,
+          1413.5,
+          2489
+        ],
+        "scaled": [
+          619.6,
+          619.6,
+          1356.9,
+          2389.4
+        ],
+        "experimental": [
+          667,
+          667,
+          1333,
+          2349
+        ],
+        "maeRaw": 65.88099185881583,
+        "rmseRaw": 82.14785382559602,
+        "maxRaw": 139.95468242786774,
+        "meanPctRaw": 4.613869048102143,
+        "maeScaled": 39.765752184463224,
+        "rmseScaled": 40.90039517141082,
+        "maxScaled": 47.361257378315145,
+        "meanPctScaled": 4.4293142861780606,
+        "citation": {
+          "source": "NIST CCCBDB experimental / Shimanouchi NSRDS-NBS 39",
+          "reference": "https://cccbdb.nist.gov/exp2x.asp?casno=124389",
+          "level": "experimental fundamental vibrational frequencies"
+        },
+        "note": "nu1 is a Fermi dyad (deperturbed 1333); harmonic single-number comparison is approximate."
+      },
+      {
+        "id": "ammonia",
+        "name": "Ammonia",
+        "status": "evaluated",
+        "linear": false,
+        "stationary": true,
+        "maxForce": 0.00006633218492624673,
+        "maxResidualTransRot": 22.596530885584816,
+        "nModes": 6,
+        "harmonic": [
+          1116.7,
+          1734.9,
+          1734.9,
+          3527.1,
+          3670,
+          3670
+        ],
+        "scaled": [
+          1072,
+          1665.5,
+          1665.5,
+          3386,
+          3523.2,
+          3523.2
+        ],
+        "experimental": [
+          950,
+          1627,
+          1627,
+          3337,
+          3444,
+          3444
+        ],
+        "maeRaw": 170.75663967323052,
+        "rmseRaw": 177.64123894249212,
+        "maxRaw": 226.01016385008506,
+        "meanPctRaw": 8.271422391268647,
+        "maeScaled": 67.73304075296785,
+        "rmseScaled": 73.92974811750283,
+        "maxScaled": 122.00406540384506,
+        "meanPctScaled": 3.9405654956178977,
+        "citation": {
+          "source": "NIST CCCBDB experimental / Shimanouchi NSRDS-NBS 39",
+          "reference": "https://cccbdb.nist.gov/exp2x.asp?casno=7664417",
+          "level": "experimental fundamental vibrational frequencies"
+        },
+        "note": "umbrella bend is inversion-split; harmonic value is an average."
+      },
+      {
+        "id": "methane",
+        "name": "Methane",
+        "status": "evaluated",
+        "linear": false,
+        "stationary": true,
+        "maxForce": 0.0000810587456853769,
+        "maxResidualTransRot": 30.59685589510453,
+        "nModes": 9,
+        "harmonic": [
+          1377.1,
+          1377.1,
+          1377.1,
+          1587.8,
+          1587.8,
+          3090,
+          3208.1,
+          3208.1,
+          3208.1
+        ],
+        "scaled": [
+          1322,
+          1322,
+          1322,
+          1524.3,
+          1524.3,
+          2966.4,
+          3079.8,
+          3079.8,
+          3079.8
+        ],
+        "experimental": [
+          1306,
+          1306,
+          1306,
+          1534,
+          1534,
+          2917,
+          3019,
+          3019,
+          3019
+        ],
+        "maeRaw": 117.9218744821278,
+        "rmseRaw": 132.571593677344,
+        "maxRaw": 189.09771525380347,
+        "meanPctRaw": 5.341525442407911,
+        "maeScaled": 33.239201535360635,
+        "rmseScaled": 40.112129045588325,
+        "maxScaled": 60.77380664365137,
+        "meanPctScaled": 1.408233961816197,
+        "citation": {
+          "source": "NIST CCCBDB experimental / Shimanouchi NSRDS-NBS 39",
+          "reference": "https://cccbdb.nist.gov/exp2x.asp?casno=74828",
+          "level": "experimental fundamental vibrational frequencies"
+        }
+      },
+      {
+        "id": "formaldehyde",
+        "name": "Formaldehyde",
+        "status": "evaluated",
+        "linear": false,
+        "stationary": true,
+        "maxForce": 0.00007810685467119285,
+        "maxResidualTransRot": 24.667353340446347,
+        "nModes": 6,
+        "harmonic": [
+          1195.1,
+          1281.4,
+          1569.3,
+          1889.9,
+          2975.2,
+          3050.5
+        ],
+        "scaled": [
+          1147.3,
+          1230.2,
+          1506.6,
+          1814.3,
+          2856.2,
+          2928.4
+        ],
+        "experimental": [
+          1167,
+          1249,
+          1500,
+          1746,
+          2782,
+          2843
+        ],
+        "maeRaw": 112.40889857162786,
+        "rmseRaw": 133.99200794667018,
+        "maxRaw": 207.45292813203832,
+        "meanPctRaw": 5.352137386552954,
+        "maeScaled": 45.5026902532984,
+        "rmseScaled": 55.159428990519714,
+        "maxScaled": 85.43481100675672,
+        "meanPctScaled": 2.2027083371406984,
+        "citation": {
+          "source": "NIST CCCBDB experimental / Shimanouchi NSRDS-NBS 39",
+          "reference": "https://cccbdb.nist.gov/exp2x.asp?casno=50000",
+          "level": "experimental fundamental vibrational frequencies"
+        }
+      },
+      {
+        "id": "ethylene",
+        "name": "Ethylene (ethene)",
+        "status": "evaluated",
+        "linear": false,
+        "stationary": true,
+        "maxForce": 0.00009770084861138867,
+        "maxResidualTransRot": 16.483296973182245,
+        "nModes": 12,
+        "harmonic": [
+          915.6,
+          942.8,
+          991,
+          1060.6,
+          1249.1,
+          1400.6,
+          1516.8,
+          1759.4,
+          3191.1,
+          3200.2,
+          3272,
+          3314.5
+        ],
+        "scaled": [
+          879,
+          905.1,
+          951.4,
+          1018.2,
+          1199.1,
+          1344.6,
+          1456.1,
+          1689.1,
+          3063.5,
+          3072.2,
+          3141.2,
+          3182
+        ],
+        "experimental": [
+          826,
+          940,
+          949,
+          1023,
+          1217,
+          1342,
+          1444,
+          1623,
+          2989,
+          3026,
+          3086,
+          3105
+        ],
+        "maeRaw": 103.65854701716073,
+        "rmseRaw": 125.6036664254458,
+        "maxRaw": 209.53614683577507,
+        "meanPctRaw": 5.416772139251186,
+        "maeScaled": 37.20801196457552,
+        "rmseScaled": 46.12976902777592,
+        "maxScaled": 76.95470096234385,
+        "meanPctScaled": 2.1418900494650637,
+        "citation": {
+          "source": "NIST CCCBDB experimental / Shimanouchi NSRDS-NBS 39",
+          "reference": "https://cccbdb.nist.gov/exp2x.asp?casno=74851",
+          "level": "experimental fundamental vibrational frequencies"
+        }
+      },
+      {
+        "id": "hydrogen_cyanide",
+        "name": "Hydrogen cyanide",
+        "status": "evaluated",
+        "linear": true,
+        "stationary": true,
+        "maxForce": 0.00008303782968045043,
+        "maxResidualTransRot": 9.810737192600445,
+        "nModes": 4,
+        "harmonic": [
+          729,
+          729,
+          2247.2,
+          3424.9
+        ],
+        "scaled": [
+          699.8,
+          699.8,
+          2157.3,
+          3287.9
+        ],
+        "experimental": [
+          712,
+          712,
+          2097,
+          3311
+        ],
+        "maeRaw": 74.51283572163476,
+        "rmseRaw": 95.00832626355759,
+        "maxRaw": 150.20731337891084,
+        "meanPctRaw": 3.8433494881280676,
+        "maeScaled": 26.94718812910787,
+        "rmseScaled": 33.42683698884115,
+        "maxScaled": 60.319020843754515,
+        "meanPctScaled": 1.7486062568656902,
+        "citation": {
+          "source": "NIST CCCBDB experimental / Shimanouchi NSRDS-NBS 39",
+          "reference": "https://cccbdb.nist.gov/exp2x.asp?casno=74908",
+          "level": "experimental fundamental vibrational frequencies"
+        }
+      },
+      {
+        "id": "methanol",
+        "name": "Methanol",
+        "status": "evaluated",
+        "linear": false,
+        "stationary": true,
+        "maxForce": 0.00008818834140054727,
+        "maxResidualTransRot": 11.462582084274764,
+        "nModes": 12,
+        "harmonic": [
+          330,
+          1101.4,
+          1133.2,
+          1193.2,
+          1419.1,
+          1523.3,
+          1541.7,
+          1549.4,
+          3044,
+          3097.3,
+          3187,
+          3870.6
+        ],
+        "scaled": [
+          316.8,
+          1057.3,
+          1087.9,
+          1145.5,
+          1362.4,
+          1462.4,
+          1480.1,
+          1487.4,
+          2922.2,
+          2973.4,
+          3059.5,
+          3715.8
+        ],
+        "experimental": [
+          200,
+          1033,
+          1060,
+          1165,
+          1345,
+          1455,
+          1477,
+          1477,
+          2844,
+          2960,
+          3000,
+          3681
+        ],
+        "maeRaw": 107.76592695684292,
+        "rmseRaw": 121.47006151855477,
+        "maxRaw": 199.95862057642717,
+        "meanPctRaw": 10.29089097525184,
+        "maeScaled": 34.38249392720786,
+        "rmseScaled": 47.351916888393454,
+        "maxScaled": 116.80146481330576,
+        "meanPctScaled": 6.158271420531207,
+        "citation": {
+          "source": "NIST CCCBDB experimental / Shimanouchi NSRDS-NBS 39",
+          "reference": "https://cccbdb.nist.gov/exp2x.asp?casno=67561",
+          "level": "experimental fundamental vibrational frequencies"
+        },
+        "note": "OH torsion ~200 cm^-1 is a large-amplitude mode poorly described as harmonic."
+      },
+      {
+        "id": "benzene",
+        "name": "Benzene",
+        "status": "evaluated",
+        "linear": false,
+        "stationary": true,
+        "maxForce": 0.000050487609277459315,
+        "maxResidualTransRot": 3.924238391012586,
+        "nModes": 30,
+        "harmonic": [
+          439,
+          439,
+          623.6,
+          623.6,
+          671.7,
+          771,
+          878.2,
+          878.2,
+          993.1,
+          993.1,
+          1019,
+          1027.9,
+          1046.7,
+          1091.6,
+          1091.6,
+          1197.4,
+          1239.7,
+          1239.7,
+          1331.7,
+          1411.9,
+          1560.5,
+          1560.5,
+          1709.6,
+          1709.6,
+          3222.7,
+          3237.5,
+          3238.1,
+          3246.4,
+          3247,
+          3266.3
+        ],
+        "scaled": [
+          421.4,
+          421.4,
+          598.6,
+          598.6,
+          644.8,
+          740.2,
+          843.1,
+          843.1,
+          953.4,
+          953.4,
+          978.2,
+          986.7,
+          1004.9,
+          1047.9,
+          1048,
+          1149.5,
+          1190.1,
+          1190.1,
+          1278.4,
+          1355.4,
+          1498.1,
+          1498.1,
+          1641.2,
+          1641.2,
+          3093.8,
+          3108,
+          3108.6,
+          3116.5,
+          3117.1,
+          3135.6
+        ],
+        "experimental": [
+          410,
+          410,
+          606,
+          606,
+          673,
+          703,
+          849,
+          849,
+          975,
+          975,
+          992,
+          995,
+          1010,
+          1038,
+          1038,
+          1150,
+          1178,
+          1178,
+          1310,
+          1326,
+          1486,
+          1486,
+          1596,
+          1596,
+          3047,
+          3047,
+          3062,
+          3063,
+          3063,
+          3068
+        ],
+        "maeRaw": 74.10688385149264,
+        "rmseRaw": 96.22017236042096,
+        "maxRaw": 198.2730154280307,
+        "meanPctRaw": 4.786347884726913,
+        "maeScaled": 24.49456556782777,
+        "rmseScaled": 31.09340990840005,
+        "maxScaled": 67.6220948109094,
+        "meanPctScaled": 1.7579088174473216,
+        "citation": {
+          "source": "NIST CCCBDB experimental / Shimanouchi NSRDS-NBS 39",
+          "reference": "https://cccbdb.nist.gov/exp2x.asp?casno=71432",
+          "level": "experimental fundamental vibrational frequencies"
+        }
+      }
+    ],
+    "overall": {
+      "n": 86,
+      "maeRaw": 99.35921630819057,
+      "rmseRaw": 119.84579488891961,
+      "maxRaw": 226.01016385008506,
+      "meanPctRaw": 5.961782128576385,
+      "maeScaled": 33.99116172583916,
+      "rmseScaled": 43.388727085556624,
+      "maxScaled": 122.00406540384506,
+      "meanPctScaled": 2.6847914423572408
+    },
+    "scaleFactor": 0.96,
+    "unit": "cm^-1"
+  },
+  "heatsOfFormation": {
+    "results": [
+      {
+        "id": "water",
+        "name": "Water",
+        "formula": "H2O",
+        "status": "not_evaluated",
+        "referenceKJ": -241.826,
+        "uncertaintyKJ": 0.04,
+        "deSaeKJ": 3.981656100524137,
+        "deLoneAtomKJ": 451.27968323498675,
+        "zpeKJ": 56.64752719061683,
+        "thermalMolKJ": 9.920916056141635,
+        "stationary": true,
+        "maxForce": 0.00007878192559145807,
+        "citation": {
+          "source": "NIST Chemistry WebBook (CODATA Key Values, Cox, Wagman et al. 1984)",
+          "reference": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C7732185&Mask=1",
+          "level": "experimental delta_f H(298.15 K), cross-checked"
+        },
+        "note": "Not yet evaluated: no verified wB97X/6-31G* free-atom reference energies available; both from-model routes are invalid (De_sae=4, De_loneAtom=451 kJ/mol vs a physical atomization of hundreds of kJ/mol). ZPE and molecule thermal shown are correct and model-consistent."
+      },
+      {
+        "id": "ammonia",
+        "name": "Ammonia",
+        "formula": "NH3",
+        "status": "not_evaluated",
+        "referenceKJ": -45.94,
+        "uncertaintyKJ": 0.35,
+        "deSaeKJ": 62.61008005195302,
+        "deLoneAtomKJ": 736.9211539814443,
+        "zpeKJ": 92.43269488924135,
+        "thermalMolKJ": 9.986731517330934,
+        "stationary": true,
+        "maxForce": 0.00006633218492624673,
+        "citation": {
+          "source": "NIST Chemistry WebBook (CODATA Key Values, Cox, Wagman et al. 1984)",
+          "reference": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C7664417&Mask=1",
+          "level": "experimental delta_f H(298.15 K), cross-checked"
+        },
+        "note": "Not yet evaluated: no verified wB97X/6-31G* free-atom reference energies available; both from-model routes are invalid (De_sae=63, De_loneAtom=737 kJ/mol vs a physical atomization of hundreds of kJ/mol). ZPE and molecule thermal shown are correct and model-consistent."
+      },
+      {
+        "id": "methane",
+        "name": "Methane",
+        "formula": "CH4",
+        "status": "not_evaluated",
+        "referenceKJ": -74.6,
+        "uncertaintyKJ": 0.3,
+        "deSaeKJ": 48.951193321210255,
+        "deLoneAtomKJ": 925.1606847916074,
+        "zpeKJ": 119.75394921153372,
+        "thermalMolKJ": 9.99806092403211,
+        "stationary": true,
+        "maxForce": 0.0000810587456853769,
+        "citation": {
+          "source": "NIST Chemistry WebBook (Manion 2002, adopting Gurvich, Veyts et al. 1991)",
+          "reference": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C74828&Mask=1",
+          "level": "experimental delta_f H(298.15 K), cross-checked"
+        },
+        "note": "Not yet evaluated: no verified wB97X/6-31G* free-atom reference energies available; both from-model routes are invalid (De_sae=49, De_loneAtom=925 kJ/mol vs a physical atomization of hundreds of kJ/mol). ZPE and molecule thermal shown are correct and model-consistent."
+      },
+      {
+        "id": "ethane",
+        "name": "Ethane",
+        "formula": "C2H6",
+        "status": "not_evaluated",
+        "referenceKJ": -84,
+        "uncertaintyKJ": 0.4,
+        "note": "Not yet evaluated: outside the diagnostic subset (no Hessian computed this run)."
+      },
+      {
+        "id": "propane",
+        "name": "Propane",
+        "formula": "C3H8",
+        "status": "not_evaluated",
+        "referenceKJ": -104.7,
+        "uncertaintyKJ": 0.5,
+        "note": "Not yet evaluated: outside the diagnostic subset (no Hessian computed this run)."
+      },
+      {
+        "id": "ethylene",
+        "name": "Ethylene (ethene)",
+        "formula": "C2H4",
+        "status": "not_evaluated",
+        "referenceKJ": 52.4,
+        "uncertaintyKJ": 0.5,
+        "deSaeKJ": -33.17347918606064,
+        "deLoneAtomKJ": 816.3094305671846,
+        "zpeKJ": 136.45744062854587,
+        "thermalMolKJ": 10.41845821192118,
+        "stationary": true,
+        "maxForce": 0.00009770084861138867,
+        "citation": {
+          "source": "NIST Chemistry WebBook (Manion 2002, adopting Gurvich, Veyts et al. 1991)",
+          "reference": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C74851&Mask=1",
+          "level": "experimental delta_f H(298.15 K), cross-checked"
+        },
+        "note": "Not yet evaluated: no verified wB97X/6-31G* free-atom reference energies available; both from-model routes are invalid (De_sae=-33, De_loneAtom=816 kJ/mol vs a physical atomization of hundreds of kJ/mol). ZPE and molecule thermal shown are correct and model-consistent."
+      },
+      {
+        "id": "propene",
+        "name": "Propene (propylene)",
+        "formula": "C3H6",
+        "status": "not_evaluated",
+        "referenceKJ": 20.4,
+        "uncertaintyKJ": 0.8,
+        "note": "Not yet evaluated: outside the diagnostic subset (no Hessian computed this run)."
+      },
+      {
+        "id": "acetylene",
+        "name": "Acetylene (ethyne)",
+        "formula": "C2H2",
+        "status": "not_evaluated",
+        "referenceKJ": 227.4,
+        "uncertaintyKJ": 0.8,
+        "note": "Not yet evaluated: outside the diagnostic subset (no Hessian computed this run)."
+      },
+      {
+        "id": "benzene",
+        "name": "Benzene",
+        "formula": "C6H6",
+        "status": "not_evaluated",
+        "referenceKJ": 82.9,
+        "uncertaintyKJ": 0.9,
+        "deSaeKJ": 147.484925924708,
+        "deLoneAtomKJ": 1341.5295454031568,
+        "zpeKJ": 269.1932986378535,
+        "thermalMolKJ": 13.775140596308589,
+        "stationary": true,
+        "maxForce": 0.000050487609277459315,
+        "citation": {
+          "source": "NIST Chemistry WebBook (Roux, Temprado et al. 2008, critical review)",
+          "reference": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C71432&Mask=1",
+          "level": "experimental delta_f H(298.15 K), cross-checked"
+        },
+        "note": "Not yet evaluated: no verified wB97X/6-31G* free-atom reference energies available; both from-model routes are invalid (De_sae=147, De_loneAtom=1342 kJ/mol vs a physical atomization of hundreds of kJ/mol). ZPE and molecule thermal shown are correct and model-consistent."
+      },
+      {
+        "id": "methanol",
+        "name": "Methanol",
+        "formula": "CH4O",
+        "status": "not_evaluated",
+        "referenceKJ": -201,
+        "uncertaintyKJ": 0.6,
+        "deSaeKJ": 22.807675027888905,
+        "deLoneAtomKJ": 894.8471570389554,
+        "zpeKJ": 137.51188037392572,
+        "thermalMolKJ": 11.142794168361204,
+        "stationary": true,
+        "maxForce": 0.00008818834140054727,
+        "citation": {
+          "source": "NIST CCCBDB experimental (-201.00 +/- 0.60); Pedley 1994 compilation",
+          "reference": "https://cccbdb.nist.gov/exp2x.asp?casno=67561",
+          "level": "experimental delta_f H(298.15 K), cross-checked"
+        },
+        "note": "Not yet evaluated: no verified wB97X/6-31G* free-atom reference energies available; both from-model routes are invalid (De_sae=23, De_loneAtom=895 kJ/mol vs a physical atomization of hundreds of kJ/mol). ZPE and molecule thermal shown are correct and model-consistent."
+      },
+      {
+        "id": "ethanol",
+        "name": "Ethanol",
+        "formula": "C2H6O",
+        "status": "not_evaluated",
+        "referenceKJ": -234.8,
+        "uncertaintyKJ": 0.5,
+        "note": "Not yet evaluated: outside the diagnostic subset (no Hessian computed this run)."
+      },
+      {
+        "id": "formaldehyde",
+        "name": "Formaldehyde",
+        "formula": "CH2O",
+        "status": "not_evaluated",
+        "referenceKJ": -108.6,
+        "uncertaintyKJ": 0.5,
+        "deSaeKJ": -25.202824790459434,
+        "deLoneAtomKJ": 395.36862062683247,
+        "zpeKJ": 71.54537946318077,
+        "thermalMolKJ": 10.00454232033361,
+        "stationary": true,
+        "maxForce": 0.00007810685467119285,
+        "citation": {
+          "source": "NIST Chemistry WebBook (Fletcher & Pilcher 1970, combustion calorimetry)",
+          "reference": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C50000&Mask=1",
+          "level": "experimental delta_f H(298.15 K), cross-checked"
+        },
+        "note": "Not yet evaluated: no verified wB97X/6-31G* free-atom reference energies available; both from-model routes are invalid (De_sae=-25, De_loneAtom=395 kJ/mol vs a physical atomization of hundreds of kJ/mol). ZPE and molecule thermal shown are correct and model-consistent."
+      },
+      {
+        "id": "acetaldehyde",
+        "name": "Acetaldehyde",
+        "formula": "C2H4O",
+        "status": "not_evaluated",
+        "referenceKJ": -170.7,
+        "uncertaintyKJ": 1.5,
+        "note": "Not yet evaluated: outside the diagnostic subset (no Hessian computed this run)."
+      },
+      {
+        "id": "acetic_acid",
+        "name": "Acetic acid",
+        "formula": "C2H4O2",
+        "status": "not_evaluated",
+        "referenceKJ": -432.8,
+        "uncertaintyKJ": 1.5,
+        "note": "Not yet evaluated: outside the diagnostic subset (no Hessian computed this run)."
+      },
+      {
+        "id": "formic_acid",
+        "name": "Formic acid",
+        "formula": "CH2O2",
+        "status": "not_evaluated",
+        "referenceKJ": -378.6,
+        "uncertaintyKJ": 0.6,
+        "note": "Not yet evaluated: outside the diagnostic subset (no Hessian computed this run)."
+      },
+      {
+        "id": "methylamine",
+        "name": "Methylamine",
+        "formula": "CH5N",
+        "status": "not_evaluated",
+        "referenceKJ": -22.5,
+        "uncertaintyKJ": 1,
+        "note": "Not yet evaluated: outside the diagnostic subset (no Hessian computed this run)."
+      },
+      {
+        "id": "hydrogen_cyanide",
+        "name": "Hydrogen cyanide",
+        "formula": "HCN",
+        "status": "not_evaluated",
+        "referenceKJ": 135.1,
+        "uncertaintyKJ": null,
+        "deSaeKJ": -14.666010275092153,
+        "deLoneAtomKJ": 181.45044534347244,
+        "zpeKJ": 42.647177748840726,
+        "thermalMolKJ": 9.210052763548916,
+        "stationary": true,
+        "maxForce": 0.00008303782968045043,
+        "citation": {
+          "source": "NIST Chemistry WebBook / NIST-JANAF (Chase 1998)",
+          "reference": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C74908&Mask=1",
+          "level": "experimental delta_f H(298.15 K), single-source"
+        },
+        "note": "Not yet evaluated: no verified wB97X/6-31G* free-atom reference energies available; both from-model routes are invalid (De_sae=-15, De_loneAtom=181 kJ/mol vs a physical atomization of hundreds of kJ/mol). ZPE and molecule thermal shown are correct and model-consistent."
+      },
+      {
+        "id": "pyridine",
+        "name": "Pyridine",
+        "formula": "C5H5N",
+        "status": "not_evaluated",
+        "referenceKJ": 140.4,
+        "uncertaintyKJ": 0.7,
+        "note": "Not yet evaluated: outside the diagnostic subset (no Hessian computed this run)."
+      },
+      {
+        "id": "furan",
+        "name": "Furan",
+        "formula": "C4H4O",
+        "status": "not_evaluated",
+        "referenceKJ": -34.7,
+        "uncertaintyKJ": 0.7,
+        "note": "Not yet evaluated: outside the diagnostic subset (no Hessian computed this run)."
+      },
+      {
+        "id": "thiophene",
+        "name": "Thiophene",
+        "formula": "C4H4S",
+        "status": "not_evaluated",
+        "referenceKJ": 115,
+        "uncertaintyKJ": 1,
+        "note": "Not yet evaluated: outside the diagnostic subset (no Hessian computed this run)."
+      },
+      {
+        "id": "chloromethane",
+        "name": "Chloromethane (methyl chloride)",
+        "formula": "CH3Cl",
+        "status": "not_evaluated",
+        "referenceKJ": -81.9,
+        "uncertaintyKJ": 0.7,
+        "note": "Not yet evaluated: outside the diagnostic subset (no Hessian computed this run)."
+      },
+      {
+        "id": "fluoromethane",
+        "name": "Fluoromethane (methyl fluoride)",
+        "formula": "CH3F",
+        "status": "not_evaluated",
+        "referenceKJ": -234.3,
+        "uncertaintyKJ": null,
+        "note": "Not yet evaluated: outside the diagnostic subset (no Hessian computed this run)."
+      },
+      {
+        "id": "carbon_dioxide",
+        "name": "Carbon dioxide",
+        "formula": "CO2",
+        "status": "not_evaluated",
+        "referenceKJ": -393.51,
+        "uncertaintyKJ": 0.13,
+        "deSaeKJ": 166.60377715028977,
+        "deLoneAtomKJ": 131.53717651453232,
+        "zpeKJ": 31.063143564634462,
+        "thermalMolKJ": 9.412317385912308,
+        "stationary": true,
+        "maxForce": 0.0000957869504969941,
+        "citation": {
+          "source": "NIST Chemistry WebBook (CODATA Key Values, Cox, Wagman et al. 1984)",
+          "reference": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C124389&Mask=1",
+          "level": "experimental delta_f H(298.15 K), cross-checked"
+        },
+        "note": "Not yet evaluated: no verified wB97X/6-31G* free-atom reference energies available; both from-model routes are invalid (De_sae=167, De_loneAtom=132 kJ/mol vs a physical atomization of hundreds of kJ/mol). ZPE and molecule thermal shown are correct and model-consistent."
+      },
+      {
+        "id": "carbon_monoxide",
+        "name": "Carbon monoxide",
+        "formula": "CO",
+        "status": "not_evaluated",
+        "referenceKJ": -110.53,
+        "uncertaintyKJ": 0.17,
+        "deSaeKJ": 2.514971520260379,
+        "deLoneAtomKJ": -28.381619656222355,
+        "zpeKJ": 13.468850456893142,
+        "thermalMolKJ": 8.676863751026852,
+        "stationary": true,
+        "maxForce": 0.00004518045539494975,
+        "citation": {
+          "source": "NIST Chemistry WebBook (CODATA Key Values, Cox, Wagman et al. 1984)",
+          "reference": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C630080&Mask=1",
+          "level": "experimental delta_f H(298.15 K), cross-checked"
+        },
+        "note": "Not yet evaluated: no verified wB97X/6-31G* free-atom reference energies available; both from-model routes are invalid (De_sae=3, De_loneAtom=-28 kJ/mol vs a physical atomization of hundreds of kJ/mol). ZPE and molecule thermal shown are correct and model-consistent."
+      },
+      {
+        "id": "hydrogen_sulfide",
+        "name": "Hydrogen sulfide",
+        "formula": "H2S",
+        "status": "not_evaluated",
+        "referenceKJ": -20.6,
+        "uncertaintyKJ": 0.5,
+        "note": "Not yet evaluated: outside the diagnostic subset (no Hessian computed this run)."
+      },
+      {
+        "id": "methanethiol",
+        "name": "Methanethiol (methyl mercaptan)",
+        "formula": "CH4S",
+        "status": "not_evaluated",
+        "referenceKJ": -22.8,
+        "uncertaintyKJ": 0.6,
+        "note": "Not yet evaluated: outside the diagnostic subset (no Hessian computed this run)."
+      }
+    ],
+    "stats": {
+      "n": 0,
+      "mae": null,
+      "rmse": null,
+      "max": null
+    },
+    "unit": "kJ/mol",
+    "evaluated": false,
+    "atomicDhfCitation": {
+      "source": "CODATA Key Values for Thermodynamics (Cox, Wagman, Medvedev 1989); ATcT",
+      "reference": "bench-data/README.md CAVEAT 1 (C 716.87, H 217.998, N 472.44, O 249.229, F 79.38, S 277.17, Cl 121.301 kJ/mol)",
+      "level": "experimental gas-phase atomic delta_f H(298.15 K)"
+    },
+    "methodology": "Atomization route: dHf(298) = sum(atomic dHf298) - (De - ZPE) - n*(5/2)RT + [H298-H0](molecule, RRHO), with De = sum(E_free_atom) - E_molecule. Harmonic (unscaled) ZPE; classical trans+rot; harmonic vibrational thermal. NOT applied: ZPE scaling, anharmonic/hindered-rotor corrections, atomic spin-orbit corrections.",
+    "blocker": "De cannot be formed from the model alone for this ANI-2x port: the shipped self-energies are linear-fit baselines that already contain the binding (De_sae ~ 0), and ANI-2x is undefined on isolated atoms (lone-atom route unphysical, worst for heavy atoms). Verified wB97X/6-31G* free-atom total energies are required and were not fabricated. Supply them to dHfFromAtomization()/evaluateHeats({freeAtomEnergies}) to produce numbers."
+  },
+  "caveats": [
+    {
+      "id": "CAVEAT 1 - enthalpy of formation is not a raw energy",
+      "caveat": "A model returns a total electronic energy, not delta_f H. Comparing them directly is meaningless; an atomization + ZPE + thermal cycle plus experimental atomic delta_f H is required.",
+      "handling": "Full atomization/RRHO cycle implemented (dHfFromAtomization). It cannot be closed for this ANI-2x port because De cannot be formed from the model (self-energies already contain binding; isolated atoms are out-of-distribution). Reported as not-yet-evaluated with diagnostic De values and correct ZPE/thermal, rather than fabricating free-atom constants."
+    },
+    {
+      "id": "CAVEAT 2 - harmonic vs fundamental frequencies",
+      "caveat": "A Hessian gives HARMONIC frequencies, systematically higher than experimental FUNDAMENTALS (3-6% for X-H). Comparing raw harmonic to fundamentals shows a fake ~5% error.",
+      "handling": "Both reported: raw harmonic AND scaled by a standard factor of 0.96 (method-appropriate wB97X/6-31G* value ~0.95). Fermi-resonance (CO2), inversion-doubling (NH3), and large-amplitude (methanol OH torsion) modes are flagged."
+    },
+    {
+      "id": "CAVEAT 3 - what each conformer energy includes",
+      "caveat": "Reference conformer energies mix electronic (no ZPE) and ZPE-corrected/effective-0K conventions.",
+      "handling": "Both conformers are relaxed with ANI-2x and the ELECTRONIC energy difference is taken. Butane is a pure electronic CCSD(T)/CBS reference (like-with-like); ethanol's ~0.12 kcal/mol effective-0K gap is sub-ZPE and near-degenerate, so ordering is a stress test. ZPE is not added to the model differences (noted per pair)."
+    }
+  ]
+}
