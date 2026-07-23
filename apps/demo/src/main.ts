@@ -270,7 +270,14 @@ function drawPlot(energies: number[]): void {
 // Three.js scene (guarded: degrade gracefully with no WebGL2).
 // ---------------------------------------------------------------------------
 let renderer: THREE.WebGLRenderer | undefined;
-let rt: { render: (s: THREE.Scene, c: THREE.PerspectiveCamera) => void; compileScene: (s: THREE.Scene) => void; setSize: (w: number, h: number) => void } | undefined;
+let rt:
+  | {
+      render: (s: THREE.Scene, c: THREE.PerspectiveCamera) => void;
+      compileScene: (s: THREE.Scene, opts?: { dynamicMeshes?: THREE.Object3D[] }) => void;
+      updateDynamic: () => void;
+      setSize: (w: number, h: number) => void;
+    }
+  | undefined;
 let controls: OrbitControls | undefined;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0d0f16);
@@ -338,8 +345,8 @@ async function initRaytracer(): Promise<void> {
     });
     r.envColor = new THREE.Color(0x556688);
     r.envIntensity = 2.2;
-    r.compileScene(scene);
     rt = r as unknown as typeof rt;
+    compileTracer();
     (window as unknown as { __rt: unknown }).__rt = r; // debug handle
     (window as unknown as { __scene: unknown }).__scene = scene; // debug handle
     demo.rtAvailable = true;
@@ -397,6 +404,20 @@ let symbols: string[] = [];
 let lastCustomSmiles: string | null = null;
 let basePositions = new Float64Array(0); // reference geometry (Perturb origin)
 let currentPositions: Float32Array<ArrayBufferLike> = new Float32Array(0); // live geometry
+/** Atoms/bonds/markers moved since the tracer last re-baked its dynamic BVH. */
+let tracerDirty = false;
+
+/**
+ * Move the molecule's meshes AND flag the ray tracer to re-bake them. Every
+ * geometry motion must go through here: the tracer's BVH is built at compile
+ * time, so moving meshes without updateDynamic() leaves the traced lighting
+ * computed against the OLD positions — visible as a ghost copy of the molecule
+ * where it used to be (user-reported artifact).
+ */
+function moveAtoms(p: ArrayLike<number>): void {
+  if (view) view.update(p);
+  tracerDirty = true;
+}
 
 // --- vibrational normal-mode state (separate view mode; never touches the
 // optimize flow). Modes are stored flat (nModes * n3) with their frequencies. ---
@@ -448,7 +469,7 @@ function setGeometry(
     const dist = Math.max(6, maxR * 2.6);
     camera.position.set(c.x + dist * 0.5, c.y + dist * 0.4, c.z + dist);
     camera.lookAt(c);
-    if (rt) rt.compileScene(scene);
+    compileTracer();
   }
   resetReadout();
   resetVibrations();
@@ -572,7 +593,7 @@ function perturb(): void {
   }
   currentPositions = p;
   demo.positions = Array.from(currentPositions); // keep the headless mirror in sync
-  if (view) view.update(currentPositions);
+  moveAtoms(currentPositions);
   resetReadout();
   resetVibrations();
   refreshVibButton();
@@ -589,9 +610,27 @@ const markerMat = new THREE.MeshBasicMaterial({
   color: 0x46d18a,
   wireframe: true,
   transparent: true,
-  opacity: 0.9,
+  opacity: 0.4, // subtle halo — user found 0.9 too heavy
 });
 const markers: THREE.Mesh[] = [];
+/** Bitmask of which markers were visible at the tracer's last compile. */
+let markersVisibleSig = 0;
+
+/**
+ * (Re)compile the ray tracer over the current scene. Atom/bond meshes plus any
+ * VISIBLE markers are registered as dynamic meshes so per-frame motion is
+ * re-baked cheaply by updateDynamic() (see moveAtoms). Invisible meshes are
+ * excluded from the BVH entirely by the library, so marker visibility changes
+ * need a recompile (rare: only on selection changes).
+ */
+function compileTracer(): void {
+  if (!rt) return;
+  const dynamicMeshes: THREE.Object3D[] = view ? [...view.atomMeshes, ...view.bondMeshes] : [];
+  for (const m of markers) if (m.visible) dynamicMeshes.push(m);
+  rt.compileScene(scene, { dynamicMeshes });
+  markersVisibleSig = markers.reduce((a, m, i) => a | (m.visible ? 1 << i : 0), 0);
+  tracerDirty = false;
+}
 function ensureMarkers(): void {
   if (markers.length || !renderer) return;
   for (let k = 0; k < 3; k++) {
@@ -628,6 +667,10 @@ function syncMarkers(): void {
     );
     mk.visible = true;
   }
+  // Marker visibility changed -> the traced scene's mesh set changed -> the
+  // tracer needs a fresh compile (positions alone ride on updateDynamic).
+  const sig = markers.reduce((a, m, i) => a | (m.visible ? 1 << i : 0), 0);
+  if (sig !== markersVisibleSig) compileTracer();
 }
 
 function updateMeasureReadout(): void {
@@ -734,7 +777,7 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     demo.lastMaxForce = msg.maxForce;
     demo.energies.push(msg.energy);
     currentPositions = msg.positions;
-    if (view) view.update(currentPositions);
+    moveAtoms(currentPositions);
     if (demo.selected.length) {
       syncMarkers();
       updateMeasureReadout();
@@ -753,7 +796,7 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     demo.finalSteps = msg.steps;
     demo.elapsedMs = msg.elapsedMs;
     currentPositions = msg.positions;
-    if (view) view.update(currentPositions);
+    moveAtoms(currentPositions);
     demo.positions = Array.from(currentPositions);
     // A SMILES seed is not an equilibrium; adopt the relaxed geometry as the
     // new Perturb origin so subsequent Perturb/Optimize behave sensibly.
@@ -808,7 +851,7 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     currentPositions = Float32Array.from(msg.equilibrium);
     basePositions = Float64Array.from(msg.equilibrium);
     demo.positions = Array.from(currentPositions);
-    if (view) view.update(currentPositions);
+    moveAtoms(currentPositions);
 
     drawSpectrum();
     spectrumEl.style.display = "block";
@@ -1072,7 +1115,7 @@ function updateVibAnimation(): void {
   vibClock += (now - vibLastT) / 1000;
   vibLastT = now;
   const p = vibPositionsAt(vibClock);
-  if (view) view.update(p);
+  moveAtoms(p);
   if (demo.selected.length) syncMarkers();
 }
 
@@ -1082,9 +1125,9 @@ function stopVibAnimation(): void {
   demo.vibSelectedMode = null;
   vibModeEl.style.display = "none";
   if (vibEquilibrium.length && view) {
-    view.update(vibEquilibrium);
+    moveAtoms(vibEquilibrium);
   } else if (view && currentPositions.length) {
-    view.update(currentPositions);
+    moveAtoms(currentPositions);
   }
   if (demo.vibReady) drawSpectrum();
 }
@@ -1326,8 +1369,15 @@ function loop(): void {
   updateVibAnimation(); // oscillate atoms along the selected normal mode
   if (demo.selected.length) syncMarkers(); // keep markers glued during orbit
   if (renderer) {
-    if (rt && demo.rtEnabled) rt.render(scene, camera);
-    else renderer.render(scene, camera);
+    if (rt && demo.rtEnabled) {
+      if (tracerDirty) {
+        rt.updateDynamic(); // re-bake moved atoms/bonds/markers into the BVH
+        tracerDirty = false;
+      }
+      rt.render(scene, camera);
+    } else {
+      renderer.render(scene, camera);
+    }
   }
 }
 

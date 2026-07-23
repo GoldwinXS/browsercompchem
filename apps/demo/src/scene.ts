@@ -87,8 +87,9 @@ export class MoleculeView {
   readonly group = new THREE.Group();
   /** Per-atom sphere meshes, index-aligned with `symbols` (for raycasting). */
   readonly atomMeshes: THREE.Mesh[] = [];
-  /** One mesh per rendered cylinder, index-aligned with `bondCyls`. */
-  private readonly bondMeshes: THREE.Mesh[] = [];
+  /** One mesh per rendered cylinder, index-aligned with `bondCyls`. Public so
+   * the ray tracer can register them as dynamic (re-baked when atoms move). */
+  readonly bondMeshes: THREE.Mesh[] = [];
   private readonly bondCyls: BondCyl[] = [];
   private readonly symbols: string[];
   private readonly tmpMid = new THREE.Vector3();
