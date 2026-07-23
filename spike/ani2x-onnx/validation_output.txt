@@ -1,0 +1,21 @@
+molecule     atoms    max|dAEV|      meanAEV
+water            3    1.110e-16    2.555e-03
+methane          5    4.441e-16    8.872e-03
+aspirin         21    6.661e-16    1.204e-02
+caffeine        24    8.882e-16    1.532e-02
+cholesterol     74    4.441e-15    2.508e-02
+peptide        129    2.220e-15    2.016e-02
+
+WORST max|dAEV| across all molecules: 4.441e-15
+PASS
+
+molecule     atoms   dE_onnx(Ha)      E_ref(Ha)  maxF_dev_f64
+water            3     2.127e-09      -76.38822     1.544e-06
+methane          5     1.661e-08      -40.49942     2.114e-07
+aspirin         21     6.303e-09     -648.53128     2.818e-06
+caffeine        24     1.073e-08     -680.21285     2.524e-06
+cholesterol     74     1.279e-09    -1131.56004           nan
+peptide        129     4.581e-08    -3013.90598           nan
+
+Worst |dE| (ONNX f32 path vs torchani f64): 4.581e-08  PASS (gate 1e-5 Ha)
+Worst max|dF| (double FD vs torchani analytic): 2.818e-06  PASS (gate 1e-4 Ha/A)

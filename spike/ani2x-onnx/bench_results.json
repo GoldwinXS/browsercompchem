@@ -1,0 +1,26 @@
+{
+  "env": {
+    "webgpu_navigator": true,
+    "webgpu_adapter": false,
+    "wasm_threads": 4,
+    "onnxruntime_web": "1.22.0",
+    "browser": "Electron 42.7.0 / Chromium 148 (Claude preview browser), Windows 11",
+    "precision": "float32"
+  },
+  "model": { "file": "ani2x_nn_energy.onnx", "bytes": 54916068 },
+  "latency_wasm": [
+    {"molecule":"water","atoms":3,"energy_ms":2.7625,"aev_ms":0.005,"force_eval_measured_ms":46.61,"force_eval_derived_ms":49.72,"energy_Ha":-76.38822},
+    {"molecule":"methane","atoms":5,"energy_ms":3.5025,"aev_ms":0.05,"force_eval_measured_ms":97.91,"force_eval_derived_ms":105.07,"energy_Ha":-40.49942},
+    {"molecule":"aspirin","atoms":21,"energy_ms":11.27,"aev_ms":0.78,"force_eval_measured_ms":1320.92,"force_eval_derived_ms":1420.02,"energy_Ha":-648.53128},
+    {"molecule":"caffeine","atoms":24,"energy_ms":11.8425,"aev_ms":0.985,"force_eval_measured_ms":1719.66,"force_eval_derived_ms":1705.32,"energy_Ha":-680.21285},
+    {"molecule":"cholesterol","atoms":74,"energy_ms":38.675,"aev_ms":9.1325,"force_eval_measured_ms":null,"force_eval_derived_ms":17171.7,"energy_Ha":-1131.56004},
+    {"molecule":"peptide","atoms":129,"energy_ms":63.1125,"aev_ms":11.9625,"force_eval_measured_ms":null,"force_eval_derived_ms":48849.08,"energy_Ha":-3013.90598}
+  ],
+  "latency_webgpu": "NOT MEASURED - no GPU adapter available in this environment",
+  "optimization": {
+    "backend":"wasm","molecule":"aspirin","atoms":21,"method":"steepest descent lr=0.02, FD forces",
+    "steps":66,"converged":true,"threshold_maxF_HaPerA":0.02,"final_maxF":0.0196,
+    "wall_ms":93962.1,"e_start_Ha":-648.41367,"e_final_Ha":-648.53183,"dE_Ha":-0.11816,
+    "energy_calls_approx":8382
+  }
+}

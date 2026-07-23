@@ -1,0 +1,192 @@
+{
+  "dataset": "frequencies",
+  "description": "Experimental gas-phase fundamental vibrational frequencies for small molecules, with mode symmetry and description. Curated from NIST CCCBDB experimental section (fetched 2026-07-22), which tabulates values from Shimanouchi 'Tables of Molecular Vibrational Frequencies' (NSRDS-NBS 39, 1972) and other primary spectroscopy. Every molecule here was cross-checked against both CCCBDB and the Shimanouchi compilation.",
+  "units": {
+    "frequency": "cm^-1",
+    "type": "experimental fundamental (anharmonic, observed band origin) frequencies"
+  },
+  "retrieved": "2026-07-22",
+  "caveat": "These are EXPERIMENTAL FUNDAMENTAL (anharmonic) frequencies. A harmonic normal-mode calculation (the default from an ML potential Hessian or ab initio second derivatives) yields HARMONIC frequencies omega_e, which are systematically HIGHER than observed fundamentals nu (typically by 3-6 percent for X-H stretches). Do NOT compare harmonic omega directly to these fundamentals. To compare like-with-like, either (a) apply a published harmonic-to-fundamental scaling factor appropriate to the method (see CCCBDB vibscale tables), or (b) compute anharmonic frequencies (e.g. VPT2) and compare to these. Fermi resonances (notably CO2 nu1/2nu2) further complicate direct comparison; the CO2 nu1 value 1333 is the deperturbed fundamental, observed as a Fermi dyad at ~1388/1285. See README.md.",
+  "primary_sources": [
+    {
+      "database": "NIST CCCBDB (Computational Chemistry Comparison and Benchmark Database), experimental vibrations",
+      "url": "https://cccbdb.nist.gov/",
+      "retrieved": "2026-07-22"
+    },
+    {
+      "database": "Shimanouchi, T. 'Tables of Molecular Vibrational Frequencies Consolidated Volume I', NSRDS-NBS 39, National Bureau of Standards, 1972",
+      "url": "https://nvlpubs.nist.gov/nistpubs/Legacy/NSRDS/nbsnsrds39.pdf"
+    }
+  ],
+  "entries": [
+    {
+      "id": "water",
+      "name": "Water",
+      "formula": "H2O",
+      "smiles": "O",
+      "point_group": "C2v",
+      "verification": "cross-checked",
+      "source_url": "https://cccbdb.nist.gov/exp2x.asp?casno=7732185",
+      "modes": [
+        {"mode": 1, "symmetry": "A1", "frequency": 3657, "description": "symmetric O-H stretch"},
+        {"mode": 2, "symmetry": "A1", "frequency": 1595, "description": "H-O-H bend"},
+        {"mode": 3, "symmetry": "B2", "frequency": 3756, "description": "antisymmetric O-H stretch"}
+      ]
+    },
+    {
+      "id": "carbon_dioxide",
+      "name": "Carbon dioxide",
+      "formula": "CO2",
+      "smiles": "O=C=O",
+      "point_group": "D_inf_h",
+      "verification": "cross-checked",
+      "source_url": "https://cccbdb.nist.gov/exp2x.asp?casno=124389",
+      "modes": [
+        {"mode": 1, "symmetry": "sigma_g+", "frequency": 1333, "description": "symmetric stretch (deperturbed; observed as Fermi dyad ~1388/1285)"},
+        {"mode": 2, "symmetry": "pi_u", "frequency": 667, "description": "doubly degenerate bend"},
+        {"mode": 3, "symmetry": "sigma_u+", "frequency": 2349, "description": "antisymmetric stretch"}
+      ]
+    },
+    {
+      "id": "ammonia",
+      "name": "Ammonia",
+      "formula": "NH3",
+      "smiles": "N",
+      "point_group": "C3v",
+      "verification": "cross-checked",
+      "source_url": "https://cccbdb.nist.gov/exp2x.asp?casno=7664417",
+      "modes": [
+        {"mode": 1, "symmetry": "A1", "frequency": 3337, "description": "symmetric N-H stretch"},
+        {"mode": 2, "symmetry": "A1", "frequency": 950, "description": "symmetric bend (umbrella); inversion-split ~932/968"},
+        {"mode": 3, "symmetry": "E", "frequency": 3444, "description": "degenerate N-H stretch"},
+        {"mode": 4, "symmetry": "E", "frequency": 1627, "description": "degenerate bend"}
+      ]
+    },
+    {
+      "id": "methane",
+      "name": "Methane",
+      "formula": "CH4",
+      "smiles": "C",
+      "point_group": "Td",
+      "verification": "cross-checked",
+      "source_url": "https://cccbdb.nist.gov/exp2x.asp?casno=74828",
+      "modes": [
+        {"mode": 1, "symmetry": "A1", "frequency": 2917, "description": "symmetric C-H stretch (Raman active)"},
+        {"mode": 2, "symmetry": "E", "frequency": 1534, "description": "doubly degenerate deformation"},
+        {"mode": 3, "symmetry": "T2", "frequency": 3019, "description": "triply degenerate C-H stretch"},
+        {"mode": 4, "symmetry": "T2", "frequency": 1306, "description": "triply degenerate deformation"}
+      ]
+    },
+    {
+      "id": "formaldehyde",
+      "name": "Formaldehyde",
+      "formula": "CH2O",
+      "smiles": "C=O",
+      "point_group": "C2v",
+      "verification": "cross-checked",
+      "source_url": "https://cccbdb.nist.gov/exp2x.asp?casno=50000",
+      "modes": [
+        {"mode": 1, "symmetry": "A1", "frequency": 2782, "description": "CH2 symmetric stretch"},
+        {"mode": 2, "symmetry": "A1", "frequency": 1746, "description": "C=O stretch"},
+        {"mode": 3, "symmetry": "A1", "frequency": 1500, "description": "CH2 scissors"},
+        {"mode": 4, "symmetry": "B1", "frequency": 1167, "description": "CH2 out-of-plane wag"},
+        {"mode": 5, "symmetry": "B2", "frequency": 2843, "description": "CH2 antisymmetric stretch"},
+        {"mode": 6, "symmetry": "B2", "frequency": 1249, "description": "CH2 rock"}
+      ]
+    },
+    {
+      "id": "ethylene",
+      "name": "Ethylene (ethene)",
+      "formula": "C2H4",
+      "smiles": "C=C",
+      "point_group": "D2h",
+      "verification": "cross-checked",
+      "source_url": "https://cccbdb.nist.gov/exp2x.asp?casno=74851",
+      "note": "Mulliken/Herzberg axis conventions vary the b-species labels; frequencies are convention-independent.",
+      "modes": [
+        {"mode": 1, "symmetry": "Ag", "frequency": 3026, "description": "CH2 symmetric stretch"},
+        {"mode": 2, "symmetry": "Ag", "frequency": 1623, "description": "C=C stretch"},
+        {"mode": 3, "symmetry": "Ag", "frequency": 1342, "description": "CH2 scissors"},
+        {"mode": 4, "symmetry": "Au", "frequency": 1023, "description": "CH2 twist"},
+        {"mode": 5, "symmetry": "B1u", "frequency": 2989, "description": "CH2 symmetric stretch"},
+        {"mode": 6, "symmetry": "B1u", "frequency": 1444, "description": "CH2 scissors"},
+        {"mode": 7, "symmetry": "B2g", "frequency": 940, "description": "CH2 wag"},
+        {"mode": 8, "symmetry": "B2u", "frequency": 3105, "description": "CH2 antisymmetric stretch"},
+        {"mode": 9, "symmetry": "B2u", "frequency": 826, "description": "CH2 rock"},
+        {"mode": 10, "symmetry": "B3g", "frequency": 3086, "description": "CH2 antisymmetric stretch"},
+        {"mode": 11, "symmetry": "B3g", "frequency": 1217, "description": "CH2 rock"},
+        {"mode": 12, "symmetry": "B3u", "frequency": 949, "description": "CH2 wag"}
+      ]
+    },
+    {
+      "id": "hydrogen_cyanide",
+      "name": "Hydrogen cyanide",
+      "formula": "HCN",
+      "smiles": "C#N",
+      "point_group": "C_inf_v",
+      "verification": "cross-checked",
+      "source_url": "https://cccbdb.nist.gov/exp2x.asp?casno=74908",
+      "modes": [
+        {"mode": 1, "symmetry": "sigma+", "frequency": 3311, "description": "C-H stretch"},
+        {"mode": 2, "symmetry": "pi", "frequency": 712, "description": "doubly degenerate bend"},
+        {"mode": 3, "symmetry": "sigma+", "frequency": 2097, "description": "C#N stretch"}
+      ],
+      "note": "CCCBDB lists nu1=3312, nu3(CN)=2089; Herzberg/Shimanouchi canonical values are 3311, 2097, 712. Differences <10 cm^-1 reflect band-origin vs assignment conventions."
+    },
+    {
+      "id": "methanol",
+      "name": "Methanol",
+      "formula": "CH4O",
+      "smiles": "CO",
+      "point_group": "Cs",
+      "verification": "cross-checked",
+      "source_url": "https://cccbdb.nist.gov/exp2x.asp?casno=67561",
+      "modes": [
+        {"mode": 1, "symmetry": "A'", "frequency": 3681, "description": "O-H stretch"},
+        {"mode": 2, "symmetry": "A'", "frequency": 3000, "description": "CH3 degenerate stretch"},
+        {"mode": 3, "symmetry": "A'", "frequency": 2844, "description": "CH3 symmetric stretch"},
+        {"mode": 4, "symmetry": "A'", "frequency": 1477, "description": "CH3 degenerate deformation"},
+        {"mode": 5, "symmetry": "A'", "frequency": 1455, "description": "CH3 symmetric deformation"},
+        {"mode": 6, "symmetry": "A'", "frequency": 1345, "description": "O-H bend (in-plane)"},
+        {"mode": 7, "symmetry": "A'", "frequency": 1060, "description": "CH3 rock"},
+        {"mode": 8, "symmetry": "A'", "frequency": 1033, "description": "C-O stretch"},
+        {"mode": 9, "symmetry": "A''", "frequency": 2960, "description": "CH3 degenerate stretch"},
+        {"mode": 10, "symmetry": "A''", "frequency": 1477, "description": "CH3 degenerate deformation"},
+        {"mode": 11, "symmetry": "A''", "frequency": 1165, "description": "CH3 rock"},
+        {"mode": 12, "symmetry": "A''", "frequency": 200, "description": "O-H torsion (low-frequency, large-amplitude)"}
+      ]
+    },
+    {
+      "id": "benzene",
+      "name": "Benzene",
+      "formula": "C6H6",
+      "smiles": "c1ccccc1",
+      "point_group": "D6h",
+      "verification": "cross-checked",
+      "source_url": "https://cccbdb.nist.gov/exp2x.asp?casno=71432",
+      "note": "30 vibrations, 20 distinct frequencies (several doubly degenerate E modes). Values from Shimanouchi via CCCBDB.",
+      "modes": [
+        {"mode": 1, "symmetry": "A1g", "frequency": 3062, "description": "C-H stretch"},
+        {"mode": 2, "symmetry": "A1g", "frequency": 992, "description": "ring breathing"},
+        {"mode": 3, "symmetry": "A2g", "frequency": 1326, "description": "C-H in-plane bend"},
+        {"mode": 4, "symmetry": "A2u", "frequency": 673, "description": "C-H out-of-plane bend"},
+        {"mode": 5, "symmetry": "B1u", "frequency": 3068, "description": "C-H stretch"},
+        {"mode": 6, "symmetry": "B1u", "frequency": 1010, "description": "ring in-plane deformation"},
+        {"mode": 7, "symmetry": "B2g", "frequency": 995, "description": "C-H out-of-plane bend"},
+        {"mode": 8, "symmetry": "B2g", "frequency": 703, "description": "ring out-of-plane deformation"},
+        {"mode": 9, "symmetry": "B2u", "frequency": 1310, "description": "C-C stretch"},
+        {"mode": 10, "symmetry": "B2u", "frequency": 1150, "description": "C-H in-plane bend"},
+        {"mode": 11, "symmetry": "E1g", "frequency": 849, "description": "C-H out-of-plane bend (degenerate)"},
+        {"mode": 12, "symmetry": "E1u", "frequency": 3063, "description": "C-H stretch (degenerate)"},
+        {"mode": 13, "symmetry": "E1u", "frequency": 1486, "description": "C-C stretch (degenerate)"},
+        {"mode": 14, "symmetry": "E1u", "frequency": 1038, "description": "C-H in-plane bend (degenerate)"},
+        {"mode": 15, "symmetry": "E2g", "frequency": 3047, "description": "C-H stretch (degenerate)"},
+        {"mode": 16, "symmetry": "E2g", "frequency": 1596, "description": "C-C stretch (degenerate)"},
+        {"mode": 17, "symmetry": "E2g", "frequency": 1178, "description": "C-H in-plane bend (degenerate)"},
+        {"mode": 18, "symmetry": "E2g", "frequency": 606, "description": "ring in-plane deformation (degenerate)"},
+        {"mode": 19, "symmetry": "E2u", "frequency": 975, "description": "C-H out-of-plane bend (degenerate)"},
+        {"mode": 20, "symmetry": "E2u", "frequency": 410, "description": "ring out-of-plane deformation (degenerate)"}
+      ]
+    }
+  ]
+}

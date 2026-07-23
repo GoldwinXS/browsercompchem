@@ -1,0 +1,123 @@
+{
+  "dataset": "conformers",
+  "description": "Relative conformer energies from high-level ab initio literature (and corroborating gas-phase experiment), for benchmarking an ML potential's ability to reproduce conformational energy differences. Each entry gives the energy of a higher conformer relative to the reference (global-minimum) conformer of the same molecule.",
+  "units": {
+    "value": "kcal/mol",
+    "convention": "delta_E = E(conformer) - E(reference conformer); positive means the conformer is higher in energy"
+  },
+  "retrieved": "2026-07-22",
+  "caveat": "Mind what each reference energy INCLUDES. Some are pure electronic (Born-Oppenheimer, no ZPE) differences at the CCSD(T)/CBS limit; others are ZPE-corrected or effective 0 K/298 K values inferred from spectroscopy. The 'energy_type' field states which. To compare an ML potential like-with-like: relax BOTH conformers with the potential and take the electronic-energy difference to compare against an electronic reference; add ZPE (from a Hessian) before comparing against a ZPE-corrected or experimental reference. Conformer geometries in geometries/ are specific rotamers/structures matching each entry.",
+  "entries": [
+    {
+      "id": "butane_gauche_anti",
+      "molecule": "n-butane",
+      "formula": "C4H10",
+      "smiles": "CCCC",
+      "reference_conformer": "anti (trans, C-C-C-C dihedral 180 deg)",
+      "conformer": "gauche (C-C-C-C dihedral ~65 deg)",
+      "value": 0.611,
+      "uncertainty": 0.05,
+      "unit": "kcal/mol",
+      "energy_type": "electronic (no ZPE), CCSD(T)/CBS (W1h) limit",
+      "level_of_theory": "CCSD(T) extrapolated to basis-set limit (W1h)",
+      "verification": "cross-checked",
+      "source": {
+        "paper": "Gruzman, D.; Karton, A.; Martin, J. M. L. Performance of Ab Initio and Density Functional Methods for Conformational Equilibria of C_nH_2n+2 Alkane Isomers (n=4-8). J. Phys. Chem. A 2009, 113, 11974-11983.",
+        "doi": "10.1021/jp903640h",
+        "url": "https://arxiv.org/abs/0907.3110",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Experimentally corroborated: gas-phase enthalpy difference 0.67 +/- 0.10 kcal/mol (Raman, Balabin J. Phys. Chem. A 2009, doi:10.1021/jp809639s) and 0.69 +/- 0.10 (IR/Raman). Electron diffraction 0.71 +/- 0.02. The 0.611 electronic value and ~0.67 thermal value are consistent."
+    },
+    {
+      "id": "ethanol_gauche_trans",
+      "molecule": "ethanol",
+      "formula": "C2H6O",
+      "smiles": "CCO",
+      "reference_conformer": "trans / anti (H-O-C-C dihedral 180 deg)",
+      "conformer": "gauche (H-O-C-C dihedral ~60 deg)",
+      "value": 0.12,
+      "uncertainty": 0.02,
+      "unit": "kcal/mol",
+      "energy_type": "effective 0 K gap (~42 cm^-1); CCSD(T) electronic + spectroscopy",
+      "level_of_theory": "CCSD(T)/aug-cc-pVQZ and CCSD(T) PES; consistent with microwave/far-IR",
+      "verification": "cross-checked",
+      "source": {
+        "paper": "Kahn, K.; Bruice, T. C. Focal-point energies and the anti/gauche conformers of ethanol; and Boussessi, R. et al. Small Alcohols Revisited: CCSD(T) Relative Potential Energies. ACS Omega 2017, 2, 8834.",
+        "doi": "10.1021/acsomega.7b01367",
+        "url": "https://pubs.acs.org/doi/10.1021/acsomega.7b01367",
+        "retrieved": "2026-07-22"
+      },
+      "note": "trans (anti) is the global minimum; gauche is higher by ~40-47 cm^-1 (0.12-0.134 kcal/mol) across multiple CCSD(T) studies, matching the microwave/far-IR experimental gap of 41 cm^-1. Note: gauche is doubly degenerate (+/-), which affects populations even though it is slightly higher in energy."
+    },
+    {
+      "id": "glycine_II_I",
+      "molecule": "glycine (conformer II relative to conformer I)",
+      "formula": "C2H5NO2",
+      "smiles": "NCC(=O)O",
+      "reference_conformer": "conformer I (Ip; ttt; planar, bifurcated N-H...O=C, lowest energy)",
+      "conformer": "conformer II (IIn; ccc; O-H...N intramolecular H-bond, high dipole)",
+      "value": 1.4,
+      "uncertainty": 0.4,
+      "unit": "kcal/mol",
+      "energy_type": "relative energy (correlated ab initio, ~ZPE-inclusive; microwave-relevant)",
+      "level_of_theory": "MP2/MP4/CCSD(T) large-basis (Csaszar 1992) and focal-point analysis (2009)",
+      "verification": "cross-checked",
+      "source": {
+        "paper": "Csaszar, A. G. Conformers of Gaseous Glycine. J. Am. Chem. Soc. 1992, 114, 9568-9575; and focal-point analysis, Chem. Phys. Lett. 2009, 477, 176.",
+        "doi": "10.1021/ja00050a041",
+        "url": "https://pubs.acs.org/doi/10.1021/ja00050a041",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Conformer I is the global minimum; conformer II lies ~1.4 +/- 0.4 kcal/mol higher but has a much larger dipole moment and is the second conformer detected by microwave spectroscopy. CAUTION: glycine conformer ordering above conformer I is level-of-theory sensitive (II vs III near-degenerate at some levels); treat sub-kcal orderings carefully."
+    },
+    {
+      "id": "cysteine_II_I",
+      "molecule": "L-cysteine (conformer II relative to conformer I)",
+      "formula": "C3H7NO2S",
+      "smiles": "C(C(C(=O)O)N)S",
+      "reference_conformer": "conformer I (global minimum)",
+      "conformer": "conformer II (second lowest)",
+      "value": 1.53,
+      "uncertainty": 0.1,
+      "unit": "kcal/mol",
+      "energy_type": "electronic + corrections (equilibrium relative energy) at CCSD(T)-F12 benchmark",
+      "level_of_theory": "CCSD(T)-F12b/cc-pVQZ-F12 with core-correlation, relativistic, and post-triples corrections",
+      "verification": "cross-checked",
+      "source": {
+        "paper": "Benchmark Ab Initio Determination of the Conformers, Proton Affinities, and Gas-Phase Basicities of Cysteine. J. Phys. Chem. A 2022, 126, 9781.",
+        "doi": "10.1021/acs.jpca.2c07035",
+        "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9806835/",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Benchmark: conformer I 0.00, II 1.53, III 1.60 kcal/mol. Corroborated by the focal-point study (Conformers of Gaseous Cysteine, J. Chem. Theory Comput. 2009, 5, 1511, doi:10.1021/ct900005c), which places three conformers within 6 kJ/mol (1.4 kcal/mol) and eleven within 10 kJ/mol. conformer_III_I datum (1.60 kcal/mol) available from the same benchmark."
+    },
+    {
+      "id": "cysteine_III_I",
+      "molecule": "L-cysteine (conformer III relative to conformer I)",
+      "formula": "C3H7NO2S",
+      "smiles": "C(C(C(=O)O)N)S",
+      "reference_conformer": "conformer I (global minimum)",
+      "conformer": "conformer III (third lowest)",
+      "value": 1.60,
+      "uncertainty": 0.1,
+      "unit": "kcal/mol",
+      "energy_type": "electronic + corrections (equilibrium relative energy) at CCSD(T)-F12 benchmark",
+      "level_of_theory": "CCSD(T)-F12b/cc-pVQZ-F12 with core-correlation, relativistic, and post-triples corrections",
+      "verification": "cross-checked",
+      "source": {
+        "paper": "Benchmark Ab Initio Determination of the Conformers, Proton Affinities, and Gas-Phase Basicities of Cysteine. J. Phys. Chem. A 2022, 126, 9781.",
+        "doi": "10.1021/acs.jpca.2c07035",
+        "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9806835/",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Conformer II (1.53) and III (1.60) are near-degenerate; a demanding test of ML-potential energy resolution."
+    }
+  ],
+  "deferred": [
+    {
+      "id": "alanine_dipeptide_C5_C7eq",
+      "reason": "Alanine dipeptide (Ac-Ala-NHMe) C5-vs-C7eq is a classic Ramachandran benchmark, but its relative energy is strongly level-of-theory dependent and no exact CCSD(T)/CBS value could be corroborated from a reachable primary source this session (Kang & Park, Chem. Phys. Lett. 2014, 600, 112, doi:10.1016/j.cplett.2014.03.038; Beachy et al., J. Am. Chem. Soc. 1997, 119, 5908, doi:10.1021/ja962310g are paywalled). Deferred to avoid guessing. Add once the primary table is obtained. C7eq is the accepted global minimum; C5 lies roughly 1-1.5 kcal/mol above it at correlated levels."
+    }
+  ]
+}

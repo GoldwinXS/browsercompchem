@@ -20,6 +20,10 @@ Thumbs.db
 npm-debug.log*
 *.log
 
+# abandoned ONNX-runtime spike: keep the scripts + RESULTS.md (they document
+# why the pure-TS path won) but not the 53 MB exported model binary
+spike/ani2x-onnx/*.onnx
+
 # NOTE: large trained model artifacts (*.onnx, weights, etc.) are
 # intentionally NOT ignored here. They belong in the models/ directory
 # (see models/README.md) and are tracked deliberately -- do not add a

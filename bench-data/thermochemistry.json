@@ -1,0 +1,459 @@
+{
+  "dataset": "thermochemistry",
+  "description": "Experimental gas-phase standard enthalpies of formation (delta_f H, 298.15 K) for small organic molecules within ANI-2x element coverage (H, C, N, O, F, S, Cl). Values curated from NIST Chemistry WebBook (primary, fetched 2026-07-22), corroborated against CODATA Key Values, NIST-JANAF, ATcT, and the Pedley/Cox-Pilcher compilations where available.",
+  "units": {
+    "value": "kJ/mol",
+    "temperature": "298.15 K",
+    "standard_state": "ideal gas, 1 bar"
+  },
+  "retrieved": "2026-07-22",
+  "caveat": "These are experimental enthalpies of FORMATION relative to elemental reference states (C graphite, H2, N2, O2, F2, S rhombic, Cl2 gas). An ML potential (ANI-2x) or ab initio method yields a total electronic (or atomization) energy, NOT delta_f H. To compare like-with-like you must convert: delta_f H(298) = sum over atoms [ delta_f H(atom, gas, 298) ] - D0(molecule) - [H(298)-H(0)]_thermal + ZPE handling. Concretely: (1) atomize the molecule using the SAME method to get the atomization energy at 0 K, (2) add experimental atomic delta_f H (gas-phase, 0 K or 298 K) for each constituent element, (3) apply zero-point vibrational energy (ZPE) and 0->298 K thermal enthalpy corrections consistently. Do NOT compare a raw single-point energy to delta_f H. See README.md 'Enthalpy-of-formation methodology' for the full recipe and pitfalls.",
+  "verification_legend": {
+    "cross-checked": "Two or more independent experimental determinations (or CODATA + JANAF) agree within combined uncertainty.",
+    "single-source": "Only one reliable determination reachable this session, or sources disagree beyond uncertainty (see note)."
+  },
+  "entries": [
+    {
+      "id": "water",
+      "name": "Water",
+      "formula": "H2O",
+      "smiles": "O",
+      "cas": "7732-18-5",
+      "value": -241.826,
+      "uncertainty": 0.040,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (CODATA Key Values, Cox, Wagman et al. 1984)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C7732185&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "CODATA review value; NIST-JANAF (Chase 1998) gives -241.83. Anchor value, effectively exact."
+    },
+    {
+      "id": "ammonia",
+      "name": "Ammonia",
+      "formula": "NH3",
+      "smiles": "N",
+      "cas": "7664-41-7",
+      "value": -45.94,
+      "uncertainty": 0.35,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (CODATA Key Values, Cox, Wagman et al. 1984)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C7664417&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "CODATA review value; NIST-JANAF (Chase 1998) gives -45.90."
+    },
+    {
+      "id": "methane",
+      "name": "Methane",
+      "formula": "CH4",
+      "smiles": "C",
+      "cas": "74-82-8",
+      "value": -74.6,
+      "uncertainty": 0.3,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (Manion 2002, adopting Gurvich, Veyts et al. 1991)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C74828&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Corroborated by combustion calorimetry (Pittam & Pilcher 1972: -74.5 +/- 0.4). NIST-JANAF older value -74.87. ATcT ~ -74.52."
+    },
+    {
+      "id": "ethane",
+      "name": "Ethane",
+      "formula": "C2H6",
+      "smiles": "CC",
+      "cas": "74-84-0",
+      "value": -84.0,
+      "uncertainty": 0.4,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (Manion 2002, adopting Gurvich, Veyts et al. 1991)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C74840&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Corroborated by Pittam & Pilcher 1972 (-83.8 +/- 0.3)."
+    },
+    {
+      "id": "propane",
+      "name": "Propane",
+      "formula": "C3H8",
+      "smiles": "CCC",
+      "cas": "74-98-6",
+      "value": -104.7,
+      "uncertainty": 0.5,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (Pittam & Pilcher 1972, combustion calorimetry)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C74986&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Corroborated by Prosen & Rossini 1945 (-103.8 +/- 0.6, from heat of hydrogenation)."
+    },
+    {
+      "id": "ethylene",
+      "name": "Ethylene (ethene)",
+      "formula": "C2H4",
+      "smiles": "C=C",
+      "cas": "74-85-1",
+      "value": 52.4,
+      "uncertainty": 0.5,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (Manion 2002, adopting Gurvich, Veyts et al. 1991)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C74851&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "NIST-JANAF (Chase 1998) gives 52.47. Values in close agreement."
+    },
+    {
+      "id": "propene",
+      "name": "Propene (propylene)",
+      "formula": "C3H6",
+      "smiles": "CC=C",
+      "cas": "115-07-1",
+      "value": 20.4,
+      "uncertainty": 0.8,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (Furuyama, Golden et al. 1969; Lacher et al. 1950)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C115071&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Two independent methods give 20.41; reanalyzed combustion data (Cox & Pilcher) gives 19.7-19.8."
+    },
+    {
+      "id": "acetylene",
+      "name": "Acetylene (ethyne)",
+      "formula": "C2H2",
+      "smiles": "C#C",
+      "cas": "74-86-2",
+      "value": 227.4,
+      "uncertainty": 0.8,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (Manion 2002, adopting Gurvich, Veyts et al. 1991)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C74862&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "NIST-JANAF gives 226.73; Prosen 226.7. ATcT reports a slightly higher +228.3. Use +227-228 range with care."
+    },
+    {
+      "id": "benzene",
+      "name": "Benzene",
+      "formula": "C6H6",
+      "smiles": "c1ccccc1",
+      "cas": "71-43-2",
+      "value": 82.9,
+      "uncertainty": 0.9,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (Roux, Temprado et al. 2008, critical review)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C71432&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Corroborated by Prosen et al. 1945 (82.93 +/- 0.50) and Good & Smith 1969 (82.8). Classic benchmark value."
+    },
+    {
+      "id": "methanol",
+      "name": "Methanol",
+      "formula": "CH4O",
+      "smiles": "CO",
+      "cas": "67-56-1",
+      "value": -201.0,
+      "uncertainty": 0.6,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST CCCBDB experimental (-201.00 +/- 0.60); Pedley 1994 compilation",
+        "url": "https://cccbdb.nist.gov/exp2x.asp?casno=67561",
+        "retrieved": "2026-07-22"
+      },
+      "note": "NIST WebBook lists a less precise 9-value average of -205 +/- 10 and a derived -201.5; the accepted value is -201.0 +/- 0.6, matched by CCCBDB and ATcT (~ -200.9)."
+    },
+    {
+      "id": "ethanol",
+      "name": "Ethanol",
+      "formula": "C2H6O",
+      "smiles": "CCO",
+      "cas": "64-17-5",
+      "value": -234.8,
+      "uncertainty": 0.5,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "Pedley 1994 compilation; NIST Chemistry WebBook 9-value average (-234 +/- 2)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C64175&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "NIST WebBook average -234 +/- 2 is consistent with the Pedley recommended -234.8 +/- 0.5."
+    },
+    {
+      "id": "formaldehyde",
+      "name": "Formaldehyde",
+      "formula": "CH2O",
+      "smiles": "C=O",
+      "cas": "50-00-0",
+      "value": -108.6,
+      "uncertainty": 0.5,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (Fletcher & Pilcher 1970, combustion calorimetry)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C50000&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Corroborated by ATcT (~ -109.2). The older NIST-JANAF value -115.90 is superseded; do NOT use it."
+    },
+    {
+      "id": "acetaldehyde",
+      "name": "Acetaldehyde",
+      "formula": "C2H4O",
+      "smiles": "CC=O",
+      "cas": "75-07-0",
+      "value": -170.7,
+      "uncertainty": 1.5,
+      "unit": "kJ/mol",
+      "verification": "single-source",
+      "source": {
+        "database": "NIST Chemistry WebBook (Wiberg, Crocker & Morgan 1991, hydrogenation calorimetry)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C75070&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "CAUTION: notable inter-source spread. This Wiberg value is -170.7; older Pedley/Cox-Pilcher compilations and ATcT give ~ -166 to -165.5. Re-verify against ATcT before using as a hard bench target."
+    },
+    {
+      "id": "acetic_acid",
+      "name": "Acetic acid",
+      "formula": "C2H4O2",
+      "smiles": "CC(=O)O",
+      "cas": "64-19-7",
+      "value": -432.8,
+      "uncertainty": 1.5,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "Pedley 1994 compilation; NIST Chemistry WebBook 8-value average (-433 +/- 3)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C64197&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "NIST WebBook average -433 +/- 3 consistent with Pedley -432.8 +/- 1.5."
+    },
+    {
+      "id": "formic_acid",
+      "name": "Formic acid",
+      "formula": "CH2O2",
+      "smiles": "OC=O",
+      "cas": "64-18-6",
+      "value": -378.6,
+      "uncertainty": 0.6,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (Guthrie 1974; Sinke 1959; Lebedeva 1964)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C64186&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Five determinations cluster -378.3 to -379.2; adopted -378.6."
+    },
+    {
+      "id": "methylamine",
+      "name": "Methylamine",
+      "formula": "CH5N",
+      "smiles": "CN",
+      "cas": "74-89-5",
+      "value": -22.5,
+      "uncertainty": 1.0,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "Pedley 1994 compilation; NIST Chemistry WebBook (Aston et al. 1937: -23.5)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C74895&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "NIST/Aston -23.5 and Pedley -22.5 agree within ~1 kJ/mol; literature also cites -23.4 +/- 1.0."
+    },
+    {
+      "id": "hydrogen_cyanide",
+      "name": "Hydrogen cyanide",
+      "formula": "HCN",
+      "smiles": "C#N",
+      "cas": "74-90-8",
+      "value": 135.1,
+      "uncertainty": null,
+      "unit": "kJ/mol",
+      "verification": "single-source",
+      "source": {
+        "database": "NIST Chemistry WebBook / NIST-JANAF (Chase 1998)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C74908&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Classic NIST-JANAF value +135.14 (no uncertainty listed). Some modern evaluations (ATcT) place it a few kJ/mol lower; verify before use as a hard target."
+    },
+    {
+      "id": "pyridine",
+      "name": "Pyridine",
+      "formula": "C5H5N",
+      "smiles": "c1ccncc1",
+      "cas": "110-86-1",
+      "value": 140.4,
+      "uncertainty": 0.7,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (Cox et al. 1954; Andon et al. 1957; Hubbard et al. 1961)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C110861&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Three independent measurements cluster 140.2-140.7 kJ/mol."
+    },
+    {
+      "id": "furan",
+      "name": "Furan",
+      "formula": "C4H4O",
+      "smiles": "c1ccoc1",
+      "cas": "110-00-9",
+      "value": -34.7,
+      "uncertainty": 0.7,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (Guthrie, Scott et al. 1952, combustion calorimetry)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C110009&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Adopted calorimetric value -34.7; Pedley gives -34.8. Indirect liquid+vaporization estimates (-27.7, -29.8) are less reliable."
+    },
+    {
+      "id": "thiophene",
+      "name": "Thiophene",
+      "formula": "C4H4S",
+      "smiles": "c1ccsc1",
+      "cas": "110-02-1",
+      "value": 115.0,
+      "uncertainty": 1.0,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (Hubbard, Scott et al. 1955, combustion calorimetry)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C110021&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Direct calorimetry 115.0 +/- 1.0; matched by Pedley. Indirect liquid-based estimates (116-218) unreliable."
+    },
+    {
+      "id": "chloromethane",
+      "name": "Chloromethane (methyl chloride)",
+      "formula": "CH3Cl",
+      "smiles": "CCl",
+      "cas": "74-87-3",
+      "value": -81.9,
+      "uncertainty": 0.7,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (Fletcher & Pilcher 1971; Manion 2002)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C74873&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Fletcher & Pilcher -81.96 +/- 0.67 and Manion -81.9 +/- 1.5 agree. NIST-JANAF older value -83.68 differs."
+    },
+    {
+      "id": "fluoromethane",
+      "name": "Fluoromethane (methyl fluoride)",
+      "formula": "CH3F",
+      "smiles": "CF",
+      "cas": "593-53-3",
+      "value": -234.3,
+      "uncertainty": null,
+      "unit": "kJ/mol",
+      "verification": "single-source",
+      "source": {
+        "database": "NIST Chemistry WebBook / NIST-JANAF (Chase 1998)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C593533&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "NIST-JANAF review value -234.30 (no uncertainty listed). Only fluorine-containing entry; an ion-based value -247 exists but is less reliable. Verify before hard use."
+    },
+    {
+      "id": "carbon_dioxide",
+      "name": "Carbon dioxide",
+      "formula": "CO2",
+      "smiles": "O=C=O",
+      "cas": "124-38-9",
+      "value": -393.51,
+      "uncertainty": 0.13,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (CODATA Key Values, Cox, Wagman et al. 1984)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C124389&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "CODATA review value; NIST-JANAF -393.52. Anchor value."
+    },
+    {
+      "id": "carbon_monoxide",
+      "name": "Carbon monoxide",
+      "formula": "CO",
+      "smiles": "[C-]#[O+]",
+      "cas": "630-08-0",
+      "value": -110.53,
+      "uncertainty": 0.17,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (CODATA Key Values, Cox, Wagman et al. 1984)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C630080&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "CODATA review value; NIST-JANAF -110.53. Anchor value."
+    },
+    {
+      "id": "hydrogen_sulfide",
+      "name": "Hydrogen sulfide",
+      "formula": "H2S",
+      "smiles": "S",
+      "cas": "7783-06-4",
+      "value": -20.6,
+      "uncertainty": 0.5,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (CODATA Key Values, Cox, Wagman et al. 1984)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C7783064&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "CODATA review value; NIST-JANAF -20.50."
+    },
+    {
+      "id": "methanethiol",
+      "name": "Methanethiol (methyl mercaptan)",
+      "formula": "CH4S",
+      "smiles": "CS",
+      "cas": "74-93-1",
+      "value": -22.8,
+      "uncertainty": 0.6,
+      "unit": "kJ/mol",
+      "verification": "cross-checked",
+      "source": {
+        "database": "NIST Chemistry WebBook (Good, Lacina & McCullough 1961, rotating-bomb calorimetry)",
+        "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C74931&Mask=1",
+        "retrieved": "2026-07-22"
+      },
+      "note": "Corroborated by Pedley (-22.9 +/- 0.6)."
+    }
+  ]
+}
