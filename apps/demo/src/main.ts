@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { MoleculeView, ATOM_RADII } from "./scene.js";
+import { MoleculeView, ATOM_RADII, type ExplicitBond } from "./scene.js";
 import { MOLECULES, MOLECULE_ORDER, DEFAULT_MOLECULE } from "./molecules.js";
-import { smilesToSeed, SMILES_EXAMPLES, rdkitVersion } from "./rdkit.js";
+import { smilesToSeed, makeConformerSeeds, SMILES_EXAMPLES, rdkitVersion, type Bond } from "./rdkit.js";
 import { createSketcher, sanitizeSketchSmiles, type JsmeApplet } from "./jsme.js";
 import { distance as measureDistance, angle as measureAngle } from "./measure.js";
 
@@ -23,6 +23,10 @@ const MODEL_VARIANT = "full-f16";
 const MODEL_DIR = `${location.origin}/models/ani2x`;
 const FIRE_OPTIONS = { forceTolerance: 0.02, maxSteps: 400, dtMax: 0.3 };
 const PERTURB_MAX = 0.2; // Angstrom, max per-component displacement seed
+/** Max atom count for the multi-seed conformer search; larger -> single seed. */
+const EMBED_MAX_ATOMS = 30;
+/** Extra structured 3D seeds tried in addition to the plain display seed. */
+const EMBED_EXTRA_SEEDS = 4;
 
 // ---------------------------------------------------------------------------
 // Headless-verifiable state (read by the browser-preview harness).
@@ -259,6 +263,13 @@ function initWebGL(): boolean {
     const fill = new THREE.PointLight(0x88aaff, 90);
     fill.position.set(-8, 4, -4);
     scene.add(fill);
+    // Directional light (no distance falloff) roughly aligned with the ray
+    // tracer's sky sunDir — the tracer honours this reliably. Keep it lit in RT.
+    const sun = new THREE.DirectionalLight(0xffffff, 2.5);
+    sun.position.set(5, 7, 4);
+    scene.add(sun);
+    // AmbientLight is IGNORED by three-realtime-rt (its procedural sky provides
+    // ambient) but is a valid fill for the raster fallback — harmless to keep.
     scene.add(new THREE.AmbientLight(0x223044, 1.2));
 
     controls = new OrbitControls(camera, renderer.domElement);
@@ -279,10 +290,24 @@ async function initRaytracer(): Promise<void> {
   try {
     const { RealtimeRaytracer } = await import("three-realtime-rt");
     // ReSTIR re-enabled: the v0.6.0 duplicate-`luminance` shader bug that forced
-    // a black image is fixed in three-realtime-rt >= 0.6.1. Default options.
-    const r = new RealtimeRaytracer(renderer);
-    // Ambient environment light so shadowed faces read (the traced path has no
-    // free ambient like the rasterizer). Tuned by eye; safe to adjust.
+    // a black image is fixed in three-realtime-rt >= 0.6.1.
+    //
+    // The tracer IGNORES THREE.AmbientLight — its procedural sky IS the ambient
+    // source for GI rays that escape the scene. Without a sky, shadowed atom
+    // faces get no fill and read as black. Enable a neutral studio-grey sky
+    // (also becomes the background, replacing the near-black void) aligned with
+    // the DirectionalLight added in initWebGL. Values tuned by eye; safe to adjust.
+    const r = new RealtimeRaytracer(renderer, {
+      sky: {
+        enabled: true,
+        sunDir: new THREE.Vector3(0.5, 0.7, 0.4).normalize(),
+        sunColor: new THREE.Color(1.0, 0.96, 0.9),
+        zenith: new THREE.Color(0.42, 0.46, 0.52),
+        horizon: new THREE.Color(0.62, 0.65, 0.7),
+        intensity: 1.1,
+      },
+    });
+    // The sky is now the primary ambient lever; keep a modest envIntensity too.
     r.envColor = new THREE.Color(0x556688);
     r.envIntensity = 2.2;
     r.compileScene(scene);
@@ -358,8 +383,17 @@ const vibScratch = { buf: new Float32Array(0) }; // reused per-frame position bu
 /**
  * Install a geometry (symbols + flat Angstrom positions) into the scene and
  * frame the camera. Shared by the built-in dropdown and the SMILES loader.
+ * `bonds` (when supplied by the SMILES/drawn path) is RDKit's real connectivity,
+ * rendered exactly; the baked presets pass none and fall back to distance
+ * perception. The bond list is fixed connectivity — it is NOT re-perceived when
+ * atoms move during optimization/animation (MoleculeView.update just re-places
+ * the same cylinders).
  */
-function setGeometry(newSymbols: string[], positions: ArrayLike<number>): void {
+function setGeometry(
+  newSymbols: string[],
+  positions: ArrayLike<number>,
+  bonds?: readonly ExplicitBond[],
+): void {
   symbols = newSymbols;
   basePositions = Float64Array.from(positions);
   currentPositions = Float32Array.from(positions);
@@ -370,7 +404,7 @@ function setGeometry(newSymbols: string[], positions: ArrayLike<number>): void {
 
   if (view && renderer) view.dispose(scene);
   if (renderer) {
-    view = new MoleculeView(symbols, currentPositions);
+    view = new MoleculeView(symbols, currentPositions, bonds);
     scene.add(view.group);
     const c = view.centroid(currentPositions);
     if (controls) controls.target.copy(c);
@@ -438,7 +472,10 @@ async function loadCustomMolecule(smiles: string): Promise<void> {
     demo.isCustom = true;
     demo.unsupported = seed.unsupported;
     demo.coverageOK = seed.unsupported.length === 0;
-    setGeometry(seed.symbols, seed.positions);
+    // Render RDKit's real connectivity — never distance-perceived — so an
+    // imperfect seed conformer can't invent bonds (dangling/2-bond H's, spurious
+    // rings, a C=O shown as C-OH).
+    setGeometry(seed.symbols, seed.positions, seed.bonds);
 
     if (!demo.coverageOK) {
       btnOptimize.disabled = true;
@@ -452,10 +489,16 @@ async function loadCustomMolecule(smiles: string): Promise<void> {
     }
 
     setStatus(`embedding 3D geometry for ${seed.symbols.length} atoms…`);
-    // The seed is a planarity-broken 2D layout; relax it into a real 3D
-    // minimum with ANI-2x before the user does anything else.
+    // The seed is a planarity-broken 2D layout; relax it into a real 3D minimum
+    // with ANI-2x. For small molecules run a cheap multi-seed conformer search
+    // (several structured 3D starts, keep the lowest-energy relaxation) to avoid
+    // the bad folded local minima a single tiny-jitter start can fall into.
     if (demo.ready) {
-      optimize({ embedding: true });
+      if (seed.symbols.length <= EMBED_MAX_ATOMS) {
+        embed(seed.symbols, seed.positions, seed.bonds);
+      } else {
+        optimize({ embedding: true });
+      }
     } else {
       btnPerturb.disabled = true;
       btnOptimize.disabled = true;
@@ -605,6 +648,7 @@ type StepMsg = { type: "step"; step: number; energy: number; maxForce: number; p
 type DoneMsg = { type: "done"; converged: boolean; energy: number; maxForce: number; steps: number; elapsedMs: number; positions: Float32Array };
 type ReadyMsg = { type: "ready"; variant: string; members: number };
 type ErrMsg = { type: "error"; message: string };
+type EmbedProgressMsg = { type: "embed-progress"; seed: number; total: number; bestEnergy: number | null };
 type VibProgressMsg = { type: "vib-progress"; done: number; total: number };
 type VibDoneMsg = {
   type: "vib-done";
@@ -620,7 +664,14 @@ type VibDoneMsg = {
   elapsedMs: number;
 };
 
-type WorkerMsg = StepMsg | DoneMsg | ReadyMsg | ErrMsg | VibProgressMsg | VibDoneMsg;
+type WorkerMsg =
+  | StepMsg
+  | DoneMsg
+  | ReadyMsg
+  | ErrMsg
+  | EmbedProgressMsg
+  | VibProgressMsg
+  | VibDoneMsg;
 
 worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
   const msg = ev.data;
@@ -631,6 +682,12 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     btnLoadSmiles.disabled = false;
     refreshVibButton();
     setStatus(`model ready — ${msg.variant}, ${msg.members} members`, "good");
+    return;
+  }
+  if (msg.type === "embed-progress") {
+    const best =
+      msg.bestEnergy === null ? "" : ` (best so far ${msg.bestEnergy.toFixed(4)} Ha)`;
+    setStatus(`conformer search: seed ${msg.seed + 1}/${msg.total}${best}`);
     return;
   }
   if (msg.type === "step") {
@@ -757,9 +814,12 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
   }
 };
 
-function optimize(opts: { embedding?: boolean } = {}): void {
-  if (!demo.ready || demo.optimizing) return;
-  if (!demo.coverageOK) return; // elements outside ANI-2x -> no energies
+/**
+ * Shared UI prep for any worker relaxation (optimize or multi-seed embed):
+ * flips the optimizing flag, clears the readout, disables controls, and starts
+ * the live elapsed ticker (main-thread, proves the numerics don't block).
+ */
+function beginRelaxUI(statusText: string): void {
   resetVibrations(); // geometry is about to move; any modes become stale
   demo.optimizing = true;
   demo.done = false;
@@ -772,20 +832,48 @@ function optimize(opts: { embedding?: boolean } = {}): void {
   molSelect.disabled = true;
   const t0 = performance.now();
   rElapsed.textContent = "…";
-  setStatus(opts.embedding ? "embedding 3D geometry (ANI-2x)…" : "optimizing…");
-  worker.postMessage({
-    type: "optimize",
-    symbols,
-    positions: Array.from(currentPositions),
-    options: FIRE_OPTIONS,
-  });
-  // live elapsed ticker (main-thread, proves non-block)
+  setStatus(statusText);
   const tick = () => {
     if (!demo.optimizing) return;
     rElapsed.textContent = `${(performance.now() - t0).toFixed(0)} ms`;
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
+}
+
+function optimize(opts: { embedding?: boolean } = {}): void {
+  if (!demo.ready || demo.optimizing) return;
+  if (!demo.coverageOK) return; // elements outside ANI-2x -> no energies
+  beginRelaxUI(opts.embedding ? "embedding 3D geometry (ANI-2x)…" : "optimizing…");
+  worker.postMessage({
+    type: "optimize",
+    symbols,
+    positions: Array.from(currentPositions),
+    options: FIRE_OPTIONS,
+  });
+}
+
+/**
+ * Multi-seed 3D embedding for a freshly-loaded custom molecule: try the plain
+ * display seed plus several structured 3D conformer seeds, relax each with
+ * ANI-2x + FIRE in the worker, and keep the lowest-energy result (a cheap
+ * conformer search that avoids bad folded minima). The worker keeps the lowest-
+ * energy result that is also geometrically valid (bonds intact, no clashes) —
+ * `bonds` is passed so it can gate out fragmented structures ANI-2x mis-scores.
+ * The worker streams each seed's descent and reports which seed won via `done`.
+ */
+function embed(embedSymbols: string[], base: ArrayLike<number>, bonds: readonly Bond[]): void {
+  if (!demo.ready || demo.optimizing) return;
+  if (!demo.coverageOK) return;
+  const seeds = [Array.from(base), ...makeConformerSeeds(base, EMBED_EXTRA_SEEDS)];
+  beginRelaxUI(`embedding 3D geometry (ANI-2x, ${seeds.length}-seed search)…`);
+  worker.postMessage({
+    type: "embed",
+    symbols: embedSymbols,
+    seeds,
+    bonds: bonds.map((b) => ({ i: b.i, j: b.j, order: b.order })),
+    options: FIRE_OPTIONS,
+  });
 }
 
 // ---------------------------------------------------------------------------

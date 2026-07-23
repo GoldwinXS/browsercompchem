@@ -23,11 +23,24 @@
 /** Elements ANI-2x is trained on. Anything else -> no meaningful energy. */
 export const ANI2X_ELEMENTS = new Set(["H", "C", "N", "O", "F", "S", "Cl"]);
 
+/**
+ * A chemical bond straight from RDKit's perceived connectivity (NOT distance-
+ * perceived). Indices are 0-based into the symbols/positions arrays; `order` is
+ * the V2000 bond type (1 single, 2 double, 3 triple, 4 aromatic).
+ */
+export interface Bond {
+  i: number;
+  j: number;
+  order: number;
+}
+
 export interface SmilesSeed {
   /** element symbols, one per atom */
   symbols: string[];
   /** flat [x0,y0,z0,...] Angstrom seed geometry (planarity-broken 2D) */
   positions: number[];
+  /** real chemical connectivity from RDKit (the authoritative bond list) */
+  bonds: Bond[];
   /** elements present that ANI-2x does not cover (empty if all supported) */
   unsupported: string[];
   /** canonical SMILES echoed back by RDKit (for the readout) */
@@ -90,16 +103,26 @@ export async function rdkitVersion(): Promise<string> {
 }
 
 /**
- * Parse a V2000 molblock's atom block into symbols + flat Angstrom coords.
- * Uses fixed-column slicing (V2000 is column-oriented): x[0:10] y[10:20]
- * z[20:30], element symbol at [31:34]. Handles 2-char symbols (Cl) correctly.
+ * Parse a V2000 molblock into symbols, flat Angstrom coords, AND the real bond
+ * list. V2000 is column-oriented and fixed-width:
+ *   counts line (lines[3]): atom count [0:3], bond count [3:6]
+ *   atom block  (lines[4 .. 4+nAtoms-1]): x[0:10] y[10:20] z[20:30] sym[31:34]
+ *   bond block  (lines[4+nAtoms .. ]):    atom1[0:3] atom2[3:6] type[6:9]
+ * Atom references in the bond block are 1-indexed; we return 0-indexed `Bond`s.
+ * Handles 2-char symbols (Cl) correctly. Exported so the bond-block parse is
+ * unit-testable without loading the ~7 MB RDKit wasm.
  */
-function parseMolblock(mb: string): { symbols: string[]; positions: number[] } {
+export function parseMolblock(mb: string): {
+  symbols: string[];
+  positions: number[];
+  bonds: Bond[];
+} {
   const lines = mb.split("\n");
   const counts = lines[3];
   if (!counts) throw new Error("malformed molblock (no counts line)");
   const nAtoms = parseInt(counts.slice(0, 3), 10);
   if (!Number.isFinite(nAtoms) || nAtoms <= 0) throw new Error("molblock has no atoms");
+  const nBonds = parseInt(counts.slice(3, 6), 10);
   const symbols: string[] = [];
   const positions: number[] = [];
   for (let i = 0; i < nAtoms; i++) {
@@ -112,7 +135,21 @@ function parseMolblock(mb: string): { symbols: string[]; positions: number[] } {
     symbols.push(sym);
     positions.push(x, y, z);
   }
-  return { symbols, positions };
+  const bonds: Bond[] = [];
+  if (Number.isFinite(nBonds) && nBonds > 0) {
+    for (let b = 0; b < nBonds; b++) {
+      const l = lines[4 + nAtoms + b];
+      if (l === undefined) throw new Error("molblock bond block truncated");
+      const a1 = parseInt(l.slice(0, 3), 10);
+      const a2 = parseInt(l.slice(3, 6), 10);
+      const type = parseInt(l.slice(6, 9), 10);
+      if (!Number.isFinite(a1) || !Number.isFinite(a2) || a1 < 1 || a2 < 1) {
+        throw new Error(`malformed bond line: ${JSON.stringify(l)}`);
+      }
+      bonds.push({ i: a1 - 1, j: a2 - 1, order: Number.isFinite(type) ? type : 1 });
+    }
+  }
+  return { symbols, positions, bonds };
 }
 
 /**
@@ -154,13 +191,52 @@ export async function smilesToSeed(smiles: string): Promise<SmilesSeed> {
     }
     const canonicalSmiles = mol.get_smiles();
     const molblock = mol.add_hs(); // explicit Hs + a 2D layout
-    const { symbols, positions } = parseMolblock(molblock);
+    const { symbols, positions, bonds } = parseMolblock(molblock);
     breakPlanarity(positions);
     const unsupported = [...new Set(symbols.filter((s) => !ANI2X_ELEMENTS.has(s)))];
-    return { symbols, positions, unsupported, canonicalSmiles };
+    return { symbols, positions, bonds, unsupported, canonicalSmiles };
   } finally {
     mol.delete();
   }
+}
+
+/**
+ * Cheap conformer search seeds: from one base layout, generate `count` genuinely-
+ * 3D starting geometries by displacing EVERY atom in ALL THREE axes (full-3D
+ * isotropic jitter), each seeded deterministically by its index for reproducible
+ * loads. Relaxing all of these with ANI-2x + FIRE and keeping the lowest-energy
+ * *geometrically-valid* result (see the worker's validity gate) avoids the bad
+ * folded local minima a single tiny-jitter start falls into.
+ *
+ * Why full-3D and not just an out-of-plane "z pucker": RDKit's 2D depiction can
+ * place non-bonded atoms pathologically close in the plane (e.g. for the ketone
+ * CC(=O)C(C)C a methyl H lands ~1.0 A from the carbonyl O). A z-only nudge keeps
+ * that in-plane near-contact, and FIRE then drives an O-H proton transfer that
+ * breaks the molecule. Displacing x/y/z together separates such contacts so the
+ * relaxation reaches an intact conformer.
+ *
+ * The amplitude is deliberately MODERATE (grows gently with index): enough to
+ * escape the 2D pathology, small enough that most seeds stay connected; the
+ * validity gate discards any that still fragment. Connectivity is fixed by RDKit
+ * (see `bonds`), so an imperfect conformer never corrupts the drawn topology.
+ */
+export function makeConformerSeeds(base: ArrayLike<number>, count: number): number[][] {
+  const n = base.length / 3;
+  const seeds: number[][] = [];
+  for (let s = 0; s < count; s++) {
+    // PRNG seeded by conformer index -> reproducible but distinct per seed.
+    let a = (0x9e3779b9 ^ Math.imul(s + 1, 0x85ebca6b)) >>> 0;
+    const rng = (): number => {
+      a = (Math.imul(a, 1664525) + 1013904223) >>> 0;
+      return a / 4294967296;
+    };
+    // Amplitude grows gently with index for a wider (but still safe) search.
+    const amp = 0.55 + s * 0.12;
+    const pos = new Array<number>(n * 3);
+    for (let i = 0; i < n * 3; i++) pos[i] = base[i]! + (rng() * 2 - 1) * amp;
+    seeds.push(pos);
+  }
+  return seeds;
 }
 
 /** Curated example SMILES that stay within ANI-2x's element set. */

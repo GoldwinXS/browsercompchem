@@ -1,11 +1,19 @@
 import * as THREE from "three";
 
 /**
- * Ball-and-stick molecule view with a FIXED bond topology (perceived once from
- * the initial geometry by distance cutoff) whose sphere positions and bond
- * cylinders are cheaply re-placed as atoms move during optimization. Fixed
- * topology is correct for a relaxation (bonds don't break) and avoids an
+ * Ball-and-stick molecule view with a FIXED bond topology whose sphere positions
+ * and bond cylinders are cheaply re-placed as atoms move during optimization.
+ * Fixed topology is correct for a relaxation (bonds don't break) and avoids an
  * O(N^2) re-perception every frame.
+ *
+ * Connectivity comes from ONE of two sources:
+ *  - an explicit bond list (from RDKit's real perceived connectivity, passed for
+ *    SMILES/drawn molecules) — rendered exactly, with double/triple bonds as
+ *    parallel offset cylinders; OR
+ *  - if no list is given (the baked PRESET molecules), a distance-cutoff
+ *    perception from the initial geometry (single bonds only).
+ * Explicit bonds are the fix for distance-perception artefacts (dangling H's,
+ * H's with two bonds, spurious rings, a C=O drawn as C-OH) on imperfect seeds.
  */
 
 /** Element -> CPK-ish color (hex). */
@@ -44,10 +52,29 @@ const COVALENT: Record<string, number> = {
   F: 0.57,
 };
 const BOND_SLACK = 0.45; // Angstrom tolerance added to covalent-radius sum
+/** Perpendicular separation of the parallel cylinders in a double bond. */
+const DOUBLE_OFFSET = 0.13;
+/** Perpendicular separation of the two outer cylinders in a triple bond. */
+const TRIPLE_OFFSET = 0.19;
 
-interface Bond {
+/** Explicit chemical bond (0-indexed atoms) with a bond order for rendering. */
+export interface ExplicitBond {
   i: number;
   j: number;
+  /** 1 single, 2 double, 3 triple, 4 aromatic (rendered as a single stick). */
+  order: number;
+}
+
+/**
+ * One rendered cylinder. A single bond is one cylinder (offset 0); a double is
+ * two (offsets ±DOUBLE_OFFSET); a triple is three (±TRIPLE_OFFSET and 0). The
+ * offset shifts the cylinder perpendicular to the bond axis so the parallel
+ * sticks read as a multiple bond.
+ */
+interface BondCyl {
+  i: number;
+  j: number;
+  offset: number;
 }
 
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
@@ -60,16 +87,26 @@ export class MoleculeView {
   readonly group = new THREE.Group();
   /** Per-atom sphere meshes, index-aligned with `symbols` (for raycasting). */
   readonly atomMeshes: THREE.Mesh[] = [];
+  /** One mesh per rendered cylinder, index-aligned with `bondCyls`. */
   private readonly bondMeshes: THREE.Mesh[] = [];
-  private readonly bonds: Bond[] = [];
+  private readonly bondCyls: BondCyl[] = [];
   private readonly symbols: string[];
   private readonly tmpMid = new THREE.Vector3();
   private readonly tmpDir = new THREE.Vector3();
+  private readonly tmpPerp = new THREE.Vector3();
   private readonly tmpQuat = new THREE.Quaternion();
   private readonly a = new THREE.Vector3();
   private readonly b = new THREE.Vector3();
 
-  constructor(symbols: string[], positions: ArrayLike<number>) {
+  /**
+   * @param explicitBonds real connectivity to render exactly (SMILES/drawn
+   *   molecules). Omit for the baked presets to fall back to distance perception.
+   */
+  constructor(
+    symbols: string[],
+    positions: ArrayLike<number>,
+    explicitBonds?: readonly ExplicitBond[],
+  ) {
     this.symbols = symbols;
 
     const sphereGeo = new THREE.SphereGeometry(1, 24, 16);
@@ -92,20 +129,37 @@ export class MoleculeView {
       this.group.add(mesh);
     }
 
-    // Perceive bonds once from the initial geometry.
     const bondMat = materialFor(0x9aa0aa);
-    const n = symbols.length;
-    for (let i = 0; i < n; i++) {
-      for (let j = i + 1; j < n; j++) {
-        const dx = positions[3 * i]! - positions[3 * j]!;
-        const dy = positions[3 * i + 1]! - positions[3 * j + 1]!;
-        const dz = positions[3 * i + 2]! - positions[3 * j + 2]!;
-        const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        const cutoff =
-          (COVALENT[symbols[i]!] ?? 0.7) + (COVALENT[symbols[j]!] ?? 0.7) + BOND_SLACK;
-        if (d <= cutoff) {
-          this.bonds.push({ i, j });
-          this.bondMeshes.push(new THREE.Mesh(cylGeo, bondMat));
+    // One or more cylinders per bond depending on order (double -> 2, triple ->
+    // 3, single/aromatic -> 1). Offsets separate the parallel sticks.
+    const addBond = (i: number, j: number, order: number): void => {
+      const offsets =
+        order === 2
+          ? [-DOUBLE_OFFSET, DOUBLE_OFFSET]
+          : order === 3
+            ? [-TRIPLE_OFFSET, 0, TRIPLE_OFFSET]
+            : [0]; // single or aromatic -> one clean stick
+      for (const offset of offsets) {
+        this.bondCyls.push({ i, j, offset });
+        this.bondMeshes.push(new THREE.Mesh(cylGeo, bondMat));
+      }
+    };
+
+    if (explicitBonds && explicitBonds.length > 0) {
+      // Render RDKit's real connectivity exactly — no distance perception.
+      for (const b of explicitBonds) addBond(b.i, b.j, b.order);
+    } else {
+      // No explicit list (presets): perceive single bonds once by distance.
+      const n = symbols.length;
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          const dx = positions[3 * i]! - positions[3 * j]!;
+          const dy = positions[3 * i + 1]! - positions[3 * j + 1]!;
+          const dz = positions[3 * i + 2]! - positions[3 * j + 2]!;
+          const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          const cutoff =
+            (COVALENT[symbols[i]!] ?? 0.7) + (COVALENT[symbols[j]!] ?? 0.7) + BOND_SLACK;
+          if (d <= cutoff) addBond(i, j, 1);
         }
       }
     }
@@ -123,18 +177,27 @@ export class MoleculeView {
         positions[3 * i + 2]!,
       );
     }
-    for (let k = 0; k < this.bonds.length; k++) {
-      const { i, j } = this.bonds[k]!;
+    for (let k = 0; k < this.bondCyls.length; k++) {
+      const { i, j, offset } = this.bondCyls[k]!;
       this.a.set(positions[3 * i]!, positions[3 * i + 1]!, positions[3 * i + 2]!);
       this.b.set(positions[3 * j]!, positions[3 * j + 1]!, positions[3 * j + 2]!);
       const bond = this.bondMeshes[k]!;
       this.tmpMid.addVectors(this.a, this.b).multiplyScalar(0.5);
       const len = this.a.distanceTo(this.b);
-      bond.position.copy(this.tmpMid);
       bond.scale.set(BOND_RADIUS, len, BOND_RADIUS);
       this.tmpDir.subVectors(this.b, this.a).normalize();
       this.tmpQuat.setFromUnitVectors(Y_AXIS, this.tmpDir);
       bond.quaternion.copy(this.tmpQuat);
+      if (offset !== 0) {
+        // Perpendicular to the bond axis (world-up × dir), for the parallel
+        // offset of a double/triple bond. Guard against a bond nearly along Y.
+        this.tmpPerp.copy(Y_AXIS);
+        if (Math.abs(this.tmpDir.y) > 0.9) this.tmpPerp.set(1, 0, 0);
+        this.tmpPerp.cross(this.tmpDir).normalize();
+        bond.position.copy(this.tmpMid).addScaledVector(this.tmpPerp, offset);
+      } else {
+        bond.position.copy(this.tmpMid);
+      }
     }
   }
 
