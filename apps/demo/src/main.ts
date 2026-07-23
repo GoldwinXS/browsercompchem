@@ -164,10 +164,10 @@ function initWebGL(): boolean {
     renderer.setSize(window.innerWidth, window.innerHeight);
     $("app").appendChild(renderer.domElement);
 
-    const key = new THREE.PointLight(0xffffff, 60);
+    const key = new THREE.PointLight(0xffffff, 220);
     key.position.set(6, 8, 6);
     scene.add(key);
-    const fill = new THREE.PointLight(0x88aaff, 20);
+    const fill = new THREE.PointLight(0x88aaff, 90);
     fill.position.set(-8, 4, -4);
     scene.add(fill);
     scene.add(new THREE.AmbientLight(0x223044, 1.2));
@@ -189,9 +189,18 @@ async function initRaytracer(): Promise<void> {
   if (!renderer) return;
   try {
     const { RealtimeRaytracer } = await import("three-realtime-rt");
-    const r = new RealtimeRaytracer(renderer);
+    // NOTE: three-realtime-rt v0.6.0 has a GLSL bug in its ReSTIR path (the
+    // `luminance` helper is defined twice in the assembled program), which fails
+    // shader compilation and yields an unlit (black) image. A molecule viewer
+    // with a couple of lights doesn't need ReSTIR, so we disable it.
+    const r = new RealtimeRaytracer(renderer, { restir: false, restirGI: false });
+    // Ambient environment light so shadowed faces read (the traced path has no
+    // free ambient like the rasterizer). Tuned by eye; safe to adjust.
+    r.envColor = new THREE.Color(0x556688);
+    r.envIntensity = 2.2;
     r.compileScene(scene);
     rt = r as unknown as typeof rt;
+    (window as unknown as { __rt: unknown }).__rt = r; // debug handle
   } catch (err) {
     // Fall back to the plain WebGL rasterizer; not a fatal error.
     demo.error = `raytracer: ${err instanceof Error ? err.message : String(err)}`;
@@ -401,10 +410,14 @@ async function boot(): Promise<void> {
   demo.webgl = initWebGL();
   if (!demo.webgl) {
     noglEl.style.display = "flex";
-  } else {
+  }
+  // Load the molecule (adds meshes) BEFORE compiling the ray tracer:
+  // three-realtime-rt rejects an empty scene ("no meshes found in scene"),
+  // which would otherwise leave us permanently on the raster fallback.
+  loadMolecule(DEFAULT_MOLECULE);
+  if (demo.webgl) {
     await initRaytracer();
   }
-  loadMolecule(DEFAULT_MOLECULE);
   loop();
 
   btnOptimize.disabled = true;
