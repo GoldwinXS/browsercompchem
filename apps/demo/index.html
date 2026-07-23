@@ -102,6 +102,34 @@
         font-size: 11px; line-height: 1.4;
       }
       #warn.show { display: block; }
+
+      /* --- structure sketcher (JSME) modal --- */
+      #sketch-overlay {
+        position: fixed; inset: 0; z-index: 50; display: none;
+        align-items: center; justify-content: center;
+        background: rgba(4, 6, 12, 0.66); backdrop-filter: blur(3px);
+      }
+      #sketch-overlay.show { display: flex; }
+      #sketch-modal {
+        background: var(--panel); border: 1px solid var(--panel-border);
+        border-radius: 12px; padding: 16px; width: min(420px, 92vw);
+        box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      }
+      #sketch-modal h2 {
+        font-size: 12px; font-weight: 600; margin: 0 0 4px;
+        letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted);
+      }
+      #sketch-modal .hint { color: var(--muted); font-size: 11px; margin: 0 0 12px; line-height: 1.4; }
+      /* JSME injects its own GWT-styled DOM here; give it a framed, centered box. */
+      #jsme-container {
+        width: 360px; max-width: 100%; min-height: 320px; margin: 0 auto 12px;
+        background: #fff; border: 1px solid var(--panel-border); border-radius: 8px;
+        overflow: hidden;
+      }
+      #sketch-status { color: var(--muted); font-size: 11px; min-height: 1.4em; margin-bottom: 10px; }
+      #sketch-status.warn { color: var(--warn); }
+      #sketch-actions { display: flex; gap: 8px; }
+      #sketch-actions button { flex: 1; }
     </style>
   </head>
   <body>
@@ -116,6 +144,7 @@
       <div class="row">
         <input class="text" id="smiles" list="smiles-presets" placeholder="SMILES — e.g. CCO" spellcheck="false" autocomplete="off" />
         <button id="load-smiles">Load</button>
+        <button id="open-sketch">Draw</button>
       </div>
       <datalist id="smiles-presets"></datalist>
       <div class="btns">
@@ -152,6 +181,22 @@
         <div id="r-measure">select 2 atoms for distance, 3 for angle</div>
       </div>
     </div>
+
+    <div id="sketch-overlay">
+      <div id="sketch-modal">
+        <h2>Draw a structure</h2>
+        <p class="hint">Sketch a molecule, then "Use structure" to build its 3D geometry with ANI-2x. Or seed the canvas from the current molecule and edit it.</p>
+        <div id="jsme-container"></div>
+        <div id="sketch-status"></div>
+        <div id="sketch-actions">
+          <button id="sketch-use" class="primary">Use structure</button>
+          <button id="sketch-seed" class="mini">Seed current</button>
+          <button id="sketch-clear" class="mini">Clear</button>
+          <button id="sketch-cancel" class="mini">Close</button>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

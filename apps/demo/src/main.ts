@@ -3,6 +3,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { MoleculeView, ATOM_RADII } from "./scene.js";
 import { MOLECULES, MOLECULE_ORDER, DEFAULT_MOLECULE } from "./molecules.js";
 import { smilesToSeed, SMILES_EXAMPLES, rdkitVersion } from "./rdkit.js";
+import { createSketcher, sanitizeSketchSmiles, type JsmeApplet } from "./jsme.js";
 import { distance as measureDistance, angle as measureAngle } from "./measure.js";
 
 /**
@@ -127,6 +128,14 @@ const btnToggleRt = $<HTMLButtonElement>("toggle-rt");
 const rRender = $("r-render");
 const btnClearSel = $<HTMLButtonElement>("clear-sel");
 const rMeasure = $("r-measure");
+const btnOpenSketch = $<HTMLButtonElement>("open-sketch");
+const sketchOverlay = $("sketch-overlay");
+const jsmeContainer = $("jsme-container");
+const btnSketchUse = $<HTMLButtonElement>("sketch-use");
+const btnSketchSeed = $<HTMLButtonElement>("sketch-seed");
+const btnSketchClear = $<HTMLButtonElement>("sketch-clear");
+const btnSketchCancel = $<HTMLButtonElement>("sketch-cancel");
+const sketchStatus = $("sketch-status");
 
 for (const key of MOLECULE_ORDER) {
   const opt = document.createElement("option");
@@ -305,6 +314,8 @@ function updateRenderReadout(): void {
 // ---------------------------------------------------------------------------
 let view: MoleculeView | undefined;
 let symbols: string[] = [];
+/** Canonical SMILES of the most recent custom (typed/drawn) molecule, for re-seeding the sketcher. */
+let lastCustomSmiles: string | null = null;
 let basePositions = new Float64Array(0); // reference geometry (Perturb origin)
 let currentPositions: Float32Array<ArrayBufferLike> = new Float32Array(0); // live geometry
 
@@ -364,6 +375,18 @@ function loadMolecule(key: string): void {
  */
 async function loadSmiles(): Promise<void> {
   const smiles = smilesInput.value.trim();
+  await loadCustomMolecule(smiles);
+}
+
+/**
+ * Shared "custom molecule from a SMILES string" path. Both the typed-SMILES
+ * input and the JSME sketcher funnel through here: RDKit supplies connectivity +
+ * explicit H, ANI-2x + FIRE (in the worker) produces the genuine 3D geometry
+ * from the planarity-broken seed, and the coverage guard disables Optimize for
+ * elements outside the ANI-2x set. See rdkit.ts for why RDKit alone can't embed
+ * 3D here.
+ */
+async function loadCustomMolecule(smiles: string): Promise<void> {
   if (!smiles) return;
   if (demo.optimizing) return;
   setWarn("");
@@ -372,6 +395,7 @@ async function loadSmiles(): Promise<void> {
   try {
     if (demo.rdkitVersion === null) demo.rdkitVersion = await rdkitVersion();
     const seed = await smilesToSeed(smiles);
+    lastCustomSmiles = seed.canonicalSmiles;
     demo.molecule = `smiles:${seed.canonicalSmiles}`;
     demo.isCustom = true;
     demo.unsupported = seed.unsupported;
@@ -648,6 +672,117 @@ function optimize(opts: { embedding?: boolean } = {}): void {
 }
 
 // ---------------------------------------------------------------------------
+// Structure sketcher (JSME). The 2D editor lives in a modal; on "Use structure"
+// we read its SMILES and push it through the SAME loadCustomMolecule path the
+// typed-SMILES box uses (RDKit seed -> ANI-2x + FIRE). Exposed for headless
+// verification via window.__sketch.
+// ---------------------------------------------------------------------------
+let sketchApplet: JsmeApplet | undefined;
+let sketchLoading = false;
+
+function setSketchStatus(text: string, warn = false): void {
+  sketchStatus.textContent = text;
+  sketchStatus.classList.toggle("warn", warn);
+}
+
+/** Ensure the JSME applet exists inside the modal (lazy, first-open only). */
+async function ensureSketcher(): Promise<JsmeApplet | undefined> {
+  if (sketchApplet) return sketchApplet;
+  if (sketchLoading) return undefined;
+  sketchLoading = true;
+  setSketchStatus("loading sketcher…");
+  try {
+    // Pass the DOM id (not the element) — GWT resolves the container by id.
+    sketchApplet = await createSketcher(jsmeContainer.id, { width: "360px", height: "320px" });
+    setSketchStatus("");
+    return sketchApplet;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    setSketchStatus(`sketcher failed to load: ${msg}`, true);
+    return undefined;
+  } finally {
+    sketchLoading = false;
+  }
+}
+
+async function openSketch(): Promise<void> {
+  sketchOverlay.classList.add("show");
+  const applet = await ensureSketcher();
+  // Convenience: if the user already typed a SMILES (or loaded one), seed it so
+  // they can edit rather than start blank. Silent — a bad seed just no-ops.
+  if (applet) {
+    const seed = smilesInput.value.trim() || lastCustomSmiles;
+    if (seed) {
+      try {
+        applet.readGenericMolecularInput(seed);
+      } catch {
+        /* ignore — leave the canvas blank */
+      }
+    }
+  }
+}
+
+function closeSketch(): void {
+  sketchOverlay.classList.remove("show");
+}
+
+/** Read the sketch, sanitize, and feed it through the shared custom-molecule path. */
+async function useSketch(): Promise<void> {
+  if (!sketchApplet) {
+    setSketchStatus("sketcher not ready yet", true);
+    return;
+  }
+  try {
+    const smiles = sanitizeSketchSmiles(sketchApplet.smiles());
+    smilesInput.value = smiles; // reflect into the typed box for transparency
+    closeSketch();
+    await loadCustomMolecule(smiles); // parse problems surface via setWarn there
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    setSketchStatus(msg, true);
+  }
+}
+
+/** Seed the canvas from the current custom molecule (or the typed SMILES). */
+function seedSketch(): void {
+  if (!sketchApplet) return;
+  const seed = lastCustomSmiles ?? smilesInput.value.trim();
+  if (!seed) {
+    setSketchStatus("no current molecule SMILES to seed from", true);
+    return;
+  }
+  try {
+    sketchApplet.readGenericMolecularInput(seed);
+    setSketchStatus("");
+  } catch {
+    setSketchStatus("could not seed the canvas from that SMILES", true);
+  }
+}
+
+function clearSketch(): void {
+  if (sketchApplet) sketchApplet.reset();
+  setSketchStatus("");
+}
+
+// Headless-verification handle: lets the browser harness drive the round-trip
+// (readGenericMolecularInput -> smiles() -> loadCustomMolecule) without a mouse.
+(window as unknown as {
+  __sketch: {
+    open: () => Promise<void>;
+    ensure: () => Promise<JsmeApplet | undefined>;
+    use: () => Promise<void>;
+    applet: () => JsmeApplet | undefined;
+    loadSmiles: (s: string) => Promise<void>;
+  };
+}).__sketch = {
+  open: openSketch,
+  ensure: ensureSketcher,
+  use: useSketch,
+  applet: () => sketchApplet,
+  loadSmiles: loadCustomMolecule,
+};
+
+// ---------------------------------------------------------------------------
 // Events.
 // ---------------------------------------------------------------------------
 molSelect.addEventListener("change", () => loadMolecule(molSelect.value));
@@ -675,6 +810,17 @@ btnToggleRt.addEventListener("click", () => {
 
 // clear measurement selection
 btnClearSel.addEventListener("click", clearSelection);
+
+// structure sketcher (JSME modal)
+btnOpenSketch.addEventListener("click", () => void openSketch());
+btnSketchUse.addEventListener("click", () => void useSketch());
+btnSketchSeed.addEventListener("click", () => seedSketch());
+btnSketchClear.addEventListener("click", () => clearSketch());
+btnSketchCancel.addEventListener("click", () => closeSketch());
+// click the dim backdrop (outside the modal) to dismiss
+sketchOverlay.addEventListener("click", (e) => {
+  if (e.target === sketchOverlay) closeSketch();
+});
 
 // Click-to-measure: distinguish a click from an orbit drag by pointer travel.
 if (renderer) {
