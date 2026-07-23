@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "fuzz": "node tools/fuzz.mjs"
   },
   "dependencies": {
     "@browser-comp-chem/engine": "*",
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "@types/three": "^0.169.0",
+    "playwright-core": "^1.61.1",
     "typescript": "^5.5.4",
     "vite": "^5.4.6"
   }
