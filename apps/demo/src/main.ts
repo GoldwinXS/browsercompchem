@@ -88,7 +88,7 @@ const demo: DemoState = {
   unsupported: [],
   atomCount: 0,
   rtAvailable: false,
-  rtEnabled: true,
+  rtEnabled: false, // default to plain raster; ray tracing is opt-in via the toggle
   renderMode: "none",
   selected: [],
   measurement: null,
