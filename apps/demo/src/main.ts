@@ -1,7 +1,9 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { MoleculeView } from "./scene.js";
+import { MoleculeView, ATOM_RADII } from "./scene.js";
 import { MOLECULES, MOLECULE_ORDER, DEFAULT_MOLECULE } from "./molecules.js";
+import { smilesToSeed, SMILES_EXAMPLES, rdkitVersion } from "./rdkit.js";
+import { distance as measureDistance, angle as measureAngle } from "./measure.js";
 
 /**
  * Interactive geometry-optimization demo.
@@ -40,6 +42,19 @@ interface DemoState {
   finalSteps: number | null;
   elapsedMs: number | null;
   error: string | null;
+  // --- extensions (RDKit SMILES + viewer controls + render mode) ---
+  isCustom: boolean; // molecule came from a typed SMILES
+  coverageOK: boolean; // all elements within ANI-2x set -> Optimize allowed
+  unsupported: string[]; // elements outside ANI-2x, if any
+  atomCount: number;
+  rtAvailable: boolean; // ray tracer initialised successfully
+  rtEnabled: boolean; // ray tracing currently active (vs raster)
+  renderMode: "raytraced" | "raster" | "none";
+  selected: number[]; // atom indices selected for measurement
+  measurement: string | null; // current distance/angle readout text
+  rdkitVersion: string | null;
+  positions: number[]; // live flat geometry snapshot (headless verification)
+  symbols: string[]; // element symbols of the current molecule
 }
 const demo: DemoState = {
   webgl: false,
@@ -57,6 +72,18 @@ const demo: DemoState = {
   finalSteps: null,
   elapsedMs: null,
   error: null,
+  isCustom: false,
+  coverageOK: true,
+  unsupported: [],
+  atomCount: 0,
+  rtAvailable: false,
+  rtEnabled: true,
+  renderMode: "none",
+  selected: [],
+  measurement: null,
+  rdkitVersion: null,
+  positions: [],
+  symbols: [],
 };
 (window as unknown as { __demo: DemoState }).__demo = demo;
 
@@ -91,6 +118,15 @@ const rElapsed = $("r-elapsed");
 const statusEl = $("status");
 const plotEl = $("plot"); // SVG
 const noglEl = $("nogl");
+const smilesInput = $<HTMLInputElement>("smiles");
+const btnLoadSmiles = $<HTMLButtonElement>("load-smiles");
+const smilesPresets = $<HTMLDataListElement>("smiles-presets");
+const warnEl = $("warn");
+const chkAutoRotate = $<HTMLInputElement>("autorotate");
+const btnToggleRt = $<HTMLButtonElement>("toggle-rt");
+const rRender = $("r-render");
+const btnClearSel = $<HTMLButtonElement>("clear-sel");
+const rMeasure = $("r-measure");
 
 for (const key of MOLECULE_ORDER) {
   const opt = document.createElement("option");
@@ -99,6 +135,23 @@ for (const key of MOLECULE_ORDER) {
   molSelect.appendChild(opt);
 }
 molSelect.value = DEFAULT_MOLECULE;
+
+for (const ex of SMILES_EXAMPLES) {
+  const opt = document.createElement("option");
+  opt.value = ex.smiles;
+  opt.textContent = ex.name;
+  smilesPresets.appendChild(opt);
+}
+
+function setWarn(text: string): void {
+  if (text) {
+    warnEl.textContent = text;
+    warnEl.classList.add("show");
+  } else {
+    warnEl.textContent = "";
+    warnEl.classList.remove("show");
+  }
+}
 
 function setStatus(text: string, cls: "" | "good" | "warn" = ""): void {
   statusEl.textContent = text;
@@ -201,9 +254,49 @@ async function initRaytracer(): Promise<void> {
     r.compileScene(scene);
     rt = r as unknown as typeof rt;
     (window as unknown as { __rt: unknown }).__rt = r; // debug handle
+    demo.rtAvailable = true;
   } catch (err) {
     // Fall back to the plain WebGL rasterizer; not a fatal error.
     demo.error = `raytracer: ${err instanceof Error ? err.message : String(err)}`;
+    demo.rtAvailable = false;
+  }
+  updateRenderReadout();
+}
+
+/**
+ * Reflect the active render path into the `render:` readout and the toggle
+ * button. Three cases: ray traced (tracer active), raster because the user
+ * toggled it off, or raster because the tracer is unavailable (with the reason
+ * the init caught, e.g. "no WebGL2" or a shader-compile failure).
+ */
+function updateRenderReadout(): void {
+  rRender.classList.remove("rt");
+  if (!renderer) {
+    demo.renderMode = "none";
+    rRender.textContent = "render: raster (no WebGL2)";
+    btnToggleRt.textContent = "ray tracing: n/a";
+    btnToggleRt.disabled = true;
+    return;
+  }
+  if (rt && demo.rtEnabled) {
+    demo.renderMode = "raytraced";
+    rRender.textContent = "render: ray traced";
+    rRender.classList.add("rt");
+    btnToggleRt.textContent = "ray tracing: on";
+    btnToggleRt.disabled = false;
+    return;
+  }
+  demo.renderMode = "raster";
+  if (rt && !demo.rtEnabled) {
+    rRender.textContent = "render: raster (ray tracing off)";
+    btnToggleRt.textContent = "ray tracing: off";
+    btnToggleRt.disabled = false;
+  } else {
+    // tracer never came up — show why
+    const reason = demo.error ? demo.error.replace(/^raytracer:\s*/, "") : "unavailable";
+    rRender.textContent = `render: raster (${reason})`;
+    btnToggleRt.textContent = "ray tracing: n/a";
+    btnToggleRt.disabled = true;
   }
 }
 
@@ -212,16 +305,21 @@ async function initRaytracer(): Promise<void> {
 // ---------------------------------------------------------------------------
 let view: MoleculeView | undefined;
 let symbols: string[] = [];
-let basePositions = new Float64Array(0); // equilibrium geometry
+let basePositions = new Float64Array(0); // reference geometry (Perturb origin)
 let currentPositions: Float32Array<ArrayBufferLike> = new Float32Array(0); // live geometry
 
-function loadMolecule(key: string): void {
-  const data = MOLECULES[key];
-  if (!data) throw new Error(`unknown molecule ${key}`);
-  demo.molecule = key;
-  symbols = data.symbols;
-  basePositions = Float64Array.from(data.positions);
-  currentPositions = Float32Array.from(data.positions);
+/**
+ * Install a geometry (symbols + flat Angstrom positions) into the scene and
+ * frame the camera. Shared by the built-in dropdown and the SMILES loader.
+ */
+function setGeometry(newSymbols: string[], positions: ArrayLike<number>): void {
+  symbols = newSymbols;
+  basePositions = Float64Array.from(positions);
+  currentPositions = Float32Array.from(positions);
+  demo.atomCount = newSymbols.length;
+  demo.symbols = newSymbols;
+  demo.positions = Array.from(currentPositions);
+  clearSelection();
 
   if (view && renderer) view.dispose(scene);
   if (renderer) {
@@ -243,6 +341,71 @@ function loadMolecule(key: string): void {
     if (rt) rt.compileScene(scene);
   }
   resetReadout();
+}
+
+/** Load one of the baked built-in molecules (all within the ANI-2x element set). */
+function loadMolecule(key: string): void {
+  const data = MOLECULES[key];
+  if (!data) throw new Error(`unknown molecule ${key}`);
+  demo.molecule = key;
+  demo.isCustom = false;
+  demo.coverageOK = true;
+  demo.unsupported = [];
+  setWarn("");
+  setGeometry(data.symbols, data.positions);
+  btnPerturb.disabled = !demo.ready;
+  btnOptimize.disabled = !demo.ready;
+}
+
+/**
+ * Load a molecule typed as SMILES. RDKit supplies connectivity + explicit H;
+ * ANI-2x + FIRE (in the worker) produces the genuine 3D geometry from the
+ * planarity-broken seed. See rdkit.ts for why RDKit alone can't embed 3D here.
+ */
+async function loadSmiles(): Promise<void> {
+  const smiles = smilesInput.value.trim();
+  if (!smiles) return;
+  if (demo.optimizing) return;
+  setWarn("");
+  btnLoadSmiles.disabled = true;
+  setStatus("parsing SMILES…");
+  try {
+    if (demo.rdkitVersion === null) demo.rdkitVersion = await rdkitVersion();
+    const seed = await smilesToSeed(smiles);
+    demo.molecule = `smiles:${seed.canonicalSmiles}`;
+    demo.isCustom = true;
+    demo.unsupported = seed.unsupported;
+    demo.coverageOK = seed.unsupported.length === 0;
+    setGeometry(seed.symbols, seed.positions);
+
+    if (!demo.coverageOK) {
+      btnOptimize.disabled = true;
+      btnPerturb.disabled = true;
+      setWarn(
+        `contains ${seed.unsupported.join(", ")} — outside ANI-2x (H,C,N,O,F,S,Cl). ` +
+          `Structure shown for display only; Optimize disabled.`,
+      );
+      setStatus(`loaded ${seed.symbols.length} atoms — display only`, "warn");
+      return;
+    }
+
+    setStatus(`embedding 3D geometry for ${seed.symbols.length} atoms…`);
+    // The seed is a planarity-broken 2D layout; relax it into a real 3D
+    // minimum with ANI-2x before the user does anything else.
+    if (demo.ready) {
+      optimize({ embedding: true });
+    } else {
+      btnPerturb.disabled = true;
+      btnOptimize.disabled = true;
+      setStatus("model still loading — will embed once ready…");
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    setWarn(`SMILES error: ${msg}`);
+    setStatus("SMILES parse failed", "warn");
+  } finally {
+    btnLoadSmiles.disabled = false;
+  }
 }
 
 function resetReadout(): void {
@@ -272,6 +435,102 @@ function perturb(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Click-to-measure: raycast atom spheres, select up to 3, show distance/angle.
+// ---------------------------------------------------------------------------
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+const markerGeo = new THREE.SphereGeometry(1, 20, 12);
+const markerMat = new THREE.MeshBasicMaterial({
+  color: 0x46d18a,
+  wireframe: true,
+  transparent: true,
+  opacity: 0.9,
+});
+const markers: THREE.Mesh[] = [];
+function ensureMarkers(): void {
+  if (markers.length || !renderer) return;
+  for (let k = 0; k < 3; k++) {
+    const m = new THREE.Mesh(markerGeo, markerMat);
+    m.visible = false;
+    scene.add(m);
+    markers.push(m);
+  }
+}
+
+function clearSelection(): void {
+  demo.selected = [];
+  updateMeasureReadout();
+  syncMarkers();
+}
+
+/** Position/show the selection markers over the currently selected atoms. */
+function syncMarkers(): void {
+  ensureMarkers();
+  for (let k = 0; k < markers.length; k++) {
+    const idx = demo.selected[k];
+    const mk = markers[k]!;
+    if (idx === undefined) {
+      mk.visible = false;
+      continue;
+    }
+    const el = symbols[idx] ?? "";
+    const r = (ATOM_RADII[el] ?? 0.3) * 1.45;
+    mk.scale.setScalar(r);
+    mk.position.set(
+      currentPositions[3 * idx]!,
+      currentPositions[3 * idx + 1]!,
+      currentPositions[3 * idx + 2]!,
+    );
+    mk.visible = true;
+  }
+}
+
+function updateMeasureReadout(): void {
+  const s = demo.selected;
+  const tag = (i: number): string => `${symbols[i] ?? "?"}${i}`;
+  if (s.length === 0) {
+    demo.measurement = null;
+    rMeasure.textContent = "select 2 atoms for distance, 3 for angle";
+  } else if (s.length === 1) {
+    demo.measurement = null;
+    rMeasure.textContent = `${tag(s[0]!)} selected`;
+  } else if (s.length === 2) {
+    const d = measureDistance(currentPositions, s[0]!, s[1]!);
+    demo.measurement = `d(${tag(s[0]!)},${tag(s[1]!)}) = ${d.toFixed(3)} A`;
+    rMeasure.textContent = `${tag(s[0]!)}–${tag(s[1]!)}: ${d.toFixed(3)} Å`;
+  } else {
+    const a = measureAngle(currentPositions, s[0]!, s[1]!, s[2]!);
+    demo.measurement = `angle(${tag(s[0]!)},${tag(s[1]!)},${tag(s[2]!)}) = ${a.toFixed(1)} deg`;
+    rMeasure.textContent = `∠ ${tag(s[0]!)}–${tag(s[1]!)}–${tag(s[2]!)}: ${a.toFixed(1)}° (vertex ${tag(s[1]!)})`;
+  }
+}
+
+function toggleAtom(idx: number): void {
+  const at = demo.selected.indexOf(idx);
+  if (at >= 0) {
+    demo.selected.splice(at, 1); // clicking a selected atom deselects it
+  } else if (demo.selected.length >= 3) {
+    demo.selected = [idx]; // 4th pick -> start a fresh measurement
+  } else {
+    demo.selected.push(idx);
+  }
+  updateMeasureReadout();
+  syncMarkers();
+}
+
+/** Raycast the atom spheres at NDC (x,y); return atom index or -1. */
+function pickAtom(clientX: number, clientY: number): number {
+  if (!renderer || !view) return -1;
+  const rect = renderer.domElement.getBoundingClientRect();
+  ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(ndc, camera);
+  const hits = raycaster.intersectObjects(view.atomMeshes, false);
+  if (!hits.length) return -1;
+  return view.atomMeshes.indexOf(hits[0]!.object as THREE.Mesh);
+}
+
+// ---------------------------------------------------------------------------
 // Worker wiring.
 // ---------------------------------------------------------------------------
 const worker = new Worker(new URL("./optimizer.worker.ts", import.meta.url), {
@@ -287,8 +546,9 @@ worker.onmessage = (ev: MessageEvent<StepMsg | DoneMsg | ReadyMsg | ErrMsg>) => 
   const msg = ev.data;
   if (msg.type === "ready") {
     demo.ready = true;
-    btnOptimize.disabled = false;
-    btnPerturb.disabled = false;
+    btnOptimize.disabled = !demo.coverageOK;
+    btnPerturb.disabled = !demo.coverageOK;
+    btnLoadSmiles.disabled = false;
     setStatus(`model ready — ${msg.variant}, ${msg.members} members`, "good");
     return;
   }
@@ -299,6 +559,10 @@ worker.onmessage = (ev: MessageEvent<StepMsg | DoneMsg | ReadyMsg | ErrMsg>) => 
     demo.energies.push(msg.energy);
     currentPositions = msg.positions;
     if (view) view.update(currentPositions);
+    if (demo.selected.length) {
+      syncMarkers();
+      updateMeasureReadout();
+    }
     rEnergy.textContent = msg.energy.toFixed(4);
     rForce.textContent = msg.maxForce.toFixed(4);
     rStep.textContent = String(msg.step);
@@ -314,12 +578,21 @@ worker.onmessage = (ev: MessageEvent<StepMsg | DoneMsg | ReadyMsg | ErrMsg>) => 
     demo.elapsedMs = msg.elapsedMs;
     currentPositions = msg.positions;
     if (view) view.update(currentPositions);
+    demo.positions = Array.from(currentPositions);
+    // A SMILES seed is not an equilibrium; adopt the relaxed geometry as the
+    // new Perturb origin so subsequent Perturb/Optimize behave sensibly.
+    if (demo.isCustom) basePositions = Float64Array.from(currentPositions);
+    if (demo.selected.length) {
+      syncMarkers();
+      updateMeasureReadout();
+    }
     rEnergy.textContent = msg.energy.toFixed(4);
     rForce.textContent = msg.maxForce.toFixed(4);
     rStep.textContent = String(msg.steps);
     rElapsed.textContent = `${msg.elapsedMs.toFixed(0)} ms`;
-    btnOptimize.disabled = false;
-    btnPerturb.disabled = false;
+    btnOptimize.disabled = !demo.coverageOK;
+    btnPerturb.disabled = !demo.coverageOK;
+    btnLoadSmiles.disabled = false;
     molSelect.disabled = false;
     if (msg.converged) {
       setStatus(
@@ -337,25 +610,28 @@ worker.onmessage = (ev: MessageEvent<StepMsg | DoneMsg | ReadyMsg | ErrMsg>) => 
   if (msg.type === "error") {
     demo.error = msg.message;
     demo.optimizing = false;
-    btnOptimize.disabled = false;
-    btnPerturb.disabled = false;
+    btnOptimize.disabled = !demo.coverageOK;
+    btnPerturb.disabled = !demo.coverageOK;
+    btnLoadSmiles.disabled = false;
     molSelect.disabled = false;
     setStatus(`error: ${msg.message}`, "warn");
   }
 };
 
-function optimize(): void {
+function optimize(opts: { embedding?: boolean } = {}): void {
   if (!demo.ready || demo.optimizing) return;
+  if (!demo.coverageOK) return; // elements outside ANI-2x -> no energies
   demo.optimizing = true;
   demo.done = false;
   demo.energies = [];
   drawPlot([]);
   btnOptimize.disabled = true;
   btnPerturb.disabled = true;
+  btnLoadSmiles.disabled = true;
   molSelect.disabled = true;
   const t0 = performance.now();
   rElapsed.textContent = "…";
-  setStatus("optimizing…");
+  setStatus(opts.embedding ? "embedding 3D geometry (ANI-2x)…" : "optimizing…");
   worker.postMessage({
     type: "optimize",
     symbols,
@@ -375,8 +651,53 @@ function optimize(): void {
 // Events.
 // ---------------------------------------------------------------------------
 molSelect.addEventListener("change", () => loadMolecule(molSelect.value));
-btnPerturb.addEventListener("click", perturb);
-btnOptimize.addEventListener("click", optimize);
+btnPerturb.addEventListener("click", () => perturb());
+btnOptimize.addEventListener("click", () => optimize());
+btnLoadSmiles.addEventListener("click", () => void loadSmiles());
+smilesInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    void loadSmiles();
+  }
+});
+
+// auto-rotate toggle (default on; degrades gracefully with no controls)
+chkAutoRotate.addEventListener("change", () => {
+  if (controls) controls.autoRotate = chkAutoRotate.checked;
+});
+
+// ray-tracing on/off toggle (falls back to renderer.render when off)
+btnToggleRt.addEventListener("click", () => {
+  if (!rt) return;
+  demo.rtEnabled = !demo.rtEnabled;
+  updateRenderReadout();
+});
+
+// clear measurement selection
+btnClearSel.addEventListener("click", clearSelection);
+
+// Click-to-measure: distinguish a click from an orbit drag by pointer travel.
+if (renderer) {
+  let downX = 0;
+  let downY = 0;
+  let dragged = false;
+  const canvas = renderer.domElement;
+  canvas.addEventListener("pointerdown", (e) => {
+    downX = e.clientX;
+    downY = e.clientY;
+    dragged = false;
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (Math.hypot(e.clientX - downX, e.clientY - downY) > 4) dragged = true;
+  });
+  canvas.addEventListener("pointerup", (e) => {
+    if (dragged) return; // it was an orbit drag, not a pick
+    const idx = pickAtom(e.clientX, e.clientY);
+    if (idx >= 0) toggleAtom(idx);
+    else clearSelection(); // clicked empty space
+  });
+}
+
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -397,8 +718,9 @@ function loop(): void {
   requestAnimationFrame(loop);
   demo.frameCount++;
   if (controls) controls.update();
+  if (demo.selected.length) syncMarkers(); // keep markers glued during orbit
   if (renderer) {
-    if (rt) rt.render(scene, camera);
+    if (rt && demo.rtEnabled) rt.render(scene, camera);
     else renderer.render(scene, camera);
   }
 }
@@ -415,9 +737,11 @@ async function boot(): Promise<void> {
   // three-realtime-rt rejects an empty scene ("no meshes found in scene"),
   // which would otherwise leave us permanently on the raster fallback.
   loadMolecule(DEFAULT_MOLECULE);
+  if (controls) controls.autoRotate = chkAutoRotate.checked;
   if (demo.webgl) {
     await initRaytracer();
   }
+  updateRenderReadout(); // covers the no-WebGL / no-tracer cases too
   loop();
 
   btnOptimize.disabled = true;

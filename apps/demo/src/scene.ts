@@ -58,7 +58,8 @@ const Y_AXIS = new THREE.Vector3(0, 1, 0);
  */
 export class MoleculeView {
   readonly group = new THREE.Group();
-  private readonly atomMeshes: THREE.Mesh[] = [];
+  /** Per-atom sphere meshes, index-aligned with `symbols` (for raycasting). */
+  readonly atomMeshes: THREE.Mesh[] = [];
   private readonly bondMeshes: THREE.Mesh[] = [];
   private readonly bonds: Bond[] = [];
   private readonly symbols: string[];

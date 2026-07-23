@@ -76,6 +76,32 @@
       #status.good { color: var(--good); }
       #status.warn { color: var(--warn); }
       .plot-label { color: var(--muted); font-size: 10px; margin-top: 8px; }
+      input.text {
+        font-family: var(--mono); font-size: 12px;
+        background: var(--panel); color: var(--fg);
+        border: 1px solid var(--panel-border); border-radius: 6px;
+        padding: 6px 10px; flex: 1; min-width: 0;
+      }
+      input.text::placeholder { color: var(--muted); }
+      .section { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--panel-border); }
+      .section-label {
+        color: var(--muted); font-size: 10px; letter-spacing: 0.04em;
+        text-transform: uppercase; margin-bottom: 6px;
+      }
+      .sub { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      .chk { display: flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; }
+      .chk input { accent-color: var(--accent); cursor: pointer; }
+      button.mini { padding: 3px 9px; font-size: 11px; }
+      .measure-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+      .measure-head span { color: var(--muted); }
+      #r-measure { color: var(--fg); font-variant-numeric: tabular-nums; min-height: 1.4em; }
+      #r-render { color: var(--muted); }
+      #r-render.rt { color: var(--good); }
+      #warn {
+        margin-top: 8px; color: var(--warn); min-height: 0; display: none;
+        font-size: 11px; line-height: 1.4;
+      }
+      #warn.show { display: block; }
     </style>
   </head>
   <body>
@@ -87,10 +113,16 @@
         <label for="mol">molecule</label>
         <select id="mol"></select>
       </div>
+      <div class="row">
+        <input class="text" id="smiles" list="smiles-presets" placeholder="SMILES — e.g. CCO" spellcheck="false" autocomplete="off" />
+        <button id="load-smiles">Load</button>
+      </div>
+      <datalist id="smiles-presets"></datalist>
       <div class="btns">
         <button id="perturb">Perturb</button>
         <button id="optimize" class="primary">Optimize</button>
       </div>
+      <div id="warn"></div>
       <div class="readout">
         <span class="k">energy</span><span class="v" id="r-energy">—</span>
         <span class="k">max force</span><span class="v" id="r-force">—</span>
@@ -100,6 +132,25 @@
       <div class="plot-label">energy (Ha) vs step</div>
       <svg id="plot" viewBox="0 0 300 96" preserveAspectRatio="none"></svg>
       <div id="status">initializing…</div>
+
+      <div class="section">
+        <div class="section-label">view</div>
+        <div class="sub">
+          <label class="chk"><input type="checkbox" id="autorotate" checked /> auto-rotate</label>
+          <button id="toggle-rt" class="mini">ray tracing</button>
+        </div>
+        <div class="sub" style="margin-top:8px">
+          <span id="r-render">render: —</span>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="measure-head">
+          <span>measure — click atoms</span>
+          <button id="clear-sel" class="mini">clear</button>
+        </div>
+        <div id="r-measure">select 2 atoms for distance, 3 for angle</div>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
