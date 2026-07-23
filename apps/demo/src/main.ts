@@ -21,7 +21,8 @@ import { EHT_SUPPORTED_ELEMENTS, type ModeIntensity as IrModeIntensity } from "@
  * models/ani2x/manifest.json: full-f32, single-f16, single-f32.
  */
 const MODEL_VARIANT = "full-f16";
-const MODEL_DIR = `${location.origin}/models/ani2x`;
+// BASE_URL is "/" in dev and "/<repo>/" on a GitHub Pages project site.
+const MODEL_DIR = `${location.origin}${import.meta.env.BASE_URL}models/ani2x`;
 // Convergence must be tight enough that floppy near-linear/planar modes reach
 // their symmetric geometry: acetylene's bending potential is so shallow that a
 // 0.02 Ha/A tolerance "converges" with a visible ~5 deg kink (measured 174.6

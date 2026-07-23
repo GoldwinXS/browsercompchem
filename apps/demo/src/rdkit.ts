@@ -73,8 +73,8 @@ declare global {
 // The dist assets are served at /rdkit/* by a small dev middleware in
 // vite.config.ts (mirrors the existing /models/* middleware) so we neither
 // duplicate the ~7 MB wasm into public/ nor commit it.
-const RDKIT_JS_URL = "/rdkit/RDKit_minimal.js";
-const RDKIT_WASM_URL = "/rdkit/RDKit_minimal.wasm";
+const RDKIT_JS_URL = `${import.meta.env.BASE_URL}rdkit/RDKit_minimal.js`;
+const RDKIT_WASM_URL = `${import.meta.env.BASE_URL}rdkit/RDKit_minimal.wasm`;
 
 let rdkitPromise: Promise<RDKitModule> | undefined;
 

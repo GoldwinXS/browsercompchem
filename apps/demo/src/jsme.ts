@@ -53,7 +53,7 @@ declare global {
 }
 
 /** Served by the serveJsme() dev middleware (see vite.config.ts). */
-const JSME_URL = "/jsme/jsme.nocache.js";
+const JSME_URL = `${import.meta.env.BASE_URL}jsme/jsme.nocache.js`;
 
 let jsmePromise: Promise<JSAppletNamespace> | undefined;
 

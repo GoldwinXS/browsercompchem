@@ -1,5 +1,5 @@
 import { defineConfig, type Plugin } from "vite";
-import { createReadStream, statSync } from "node:fs";
+import { createReadStream, statSync, cpSync, mkdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { createRequire } from "node:module";
 
@@ -141,9 +141,38 @@ function serveJsme(): Plugin {
   };
 }
 
+/**
+ * Static-build twin of the three dev middlewares above: after `vite build`,
+ * copy the ANI-2x weights, the RDKit MinimalLib dist, and the JSME package into
+ * `dist/{models,rdkit,jsme}` so the built site serves the exact same URLs the
+ * dev server answers (`<base>models/...`, `<base>rdkit/...`, `<base>jsme/...`).
+ * Dev keeps streaming them off disk; only `vite build` pays the copy.
+ */
+function copyStaticAssets(): Plugin {
+  const require = createRequire(resolve(__dirname, "vite.config.ts"));
+  return {
+    name: "copy-static-assets",
+    apply: "build",
+    closeBundle() {
+      const dist = resolve(__dirname, "dist");
+      mkdirSync(dist, { recursive: true });
+      cpSync(resolve(__dirname, "../../models"), resolve(dist, "models"), { recursive: true });
+      const rdkitRoot = dirname(require.resolve("@rdkit/rdkit/dist/RDKit_minimal.js"));
+      for (const f of ["RDKit_minimal.js", "RDKit_minimal.wasm"]) {
+        cpSync(resolve(rdkitRoot, f), resolve(dist, "rdkit", f));
+      }
+      const jsmeRoot = dirname(require.resolve("jsme-editor/jsme.nocache.js"));
+      cpSync(jsmeRoot, resolve(dist, "jsme"), { recursive: true });
+    },
+  };
+}
+
 export default defineConfig({
   root: __dirname,
-  plugins: [serveModels(), serveRdkit(), serveJsme()],
+  // GitHub Pages serves this app at /<repo>/ -- set DEPLOY_BASE there. Dev and
+  // plain local builds default to "/", byte-identical to the old behavior.
+  base: process.env.DEPLOY_BASE || "/",
+  plugins: [serveModels(), serveRdkit(), serveJsme(), copyStaticAssets()],
   server: {
     host: true, // 0.0.0.0 — reachable over the tailnet
     port: 8142,
