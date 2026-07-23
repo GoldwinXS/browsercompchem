@@ -8,7 +8,7 @@
  * Protocol (main -> worker):
  *   { type: "init", modelDir, variant, members? }                      (epoch-independent)
  *   { type: "optimize", symbols, positions: number[], options, epoch }
- *   { type: "embed", symbols, seeds, bonds, options, epoch }
+ *   { type: "embed", symbols, seed, bonds, options, epoch }
  *   { type: "vibrations", symbols, positions: number[], epoch }
  *   { type: "orbitals", symbols, positions: number[], epoch }
  *   { type: "orbital-grid", orbitalIndex, isovalue, epoch }
@@ -17,7 +17,6 @@
  *   { type: "ready", variant, members }                                (epoch-independent)
  *   { type: "step", step, energy, maxForce, positions, epoch }  (transferable)
  *   { type: "done", converged, energy, maxForce, steps, elapsedMs, positions, epoch }
- *   { type: "embed-progress", seed, total, bestEnergy, epoch }
  *   { type: "vib-progress" | "vib-done", ..., epoch }
  *   { type: "orb-done" | "orb-progress" | "orb-grid-done", ..., epoch }
  *   { type: "error", message, epoch? }         (epoch omitted only for "init" failures)
@@ -48,29 +47,16 @@ import {
   gradientNormals,
   mullikenCharges,
   orbitalComposition,
+  embed3d,
   type EnergyForceProvider,
   type EnergyForces,
   type Molecule,
   type ExtendedHuckelResult,
+  type FFBond,
 } from "@browser-comp-chem/engine";
 
 /** Above this max force we treat a geometry as NOT a stationary point and relax it first. */
 const STATIONARY_THRESHOLD = 1e-3;
-
-/** Covalent radii (Angstrom) for the geometry-validity gate in the embed search. */
-const COVALENT: Record<string, number> = {
-  H: 0.31,
-  C: 0.76,
-  N: 0.71,
-  O: 0.66,
-  S: 1.05,
-  Cl: 1.02,
-  F: 0.57,
-};
-/** A real bond can be stretched at most this far past its covalent-radius sum. */
-const BOND_STRETCH_SLACK = 0.7;
-/** No two non-bonded atoms may sit closer than this (a clash = broken geometry). */
-const CLASH_DISTANCE = 1.15;
 
 let provider: Ani2xProvider | undefined;
 
@@ -103,37 +89,6 @@ function maxAbs(a: Float64Array): number {
     if (v > m) m = v;
   }
   return m;
-}
-
-/**
- * Is a relaxed conformer geometrically sane given the known connectivity?
- * ANI-2x can score a fragmented/rearranged structure as low-energy, so the
- * multi-seed search must reject any result where a real bond stretched absurdly
- * far or two non-bonded atoms overlap. Returns the count of violations (0 = ok).
- */
-function geometryViolations(
-  symbols: string[],
-  pos: Float64Array,
-  bonds: { i: number; j: number }[],
-): number {
-  const dist = (i: number, j: number): number =>
-    Math.hypot(pos[3 * i]! - pos[3 * j]!, pos[3 * i + 1]! - pos[3 * j + 1]!, pos[3 * i + 2]! - pos[3 * j + 2]!);
-  let violations = 0;
-  const bonded = new Set<number>();
-  const n = symbols.length;
-  for (const b of bonds) {
-    bonded.add(b.i * n + b.j);
-    bonded.add(b.j * n + b.i);
-    const cutoff = (COVALENT[symbols[b.i]!] ?? 0.77) + (COVALENT[symbols[b.j]!] ?? 0.77) + BOND_STRETCH_SLACK;
-    if (dist(b.i, b.j) > cutoff) violations++;
-  }
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      if (bonded.has(i * n + j)) continue;
-      if (dist(i, j) < CLASH_DISTANCE) violations++;
-    }
-  }
-  return violations;
 }
 
 /**
@@ -185,10 +140,15 @@ self.onmessage = async (ev: MessageEvent) => {
     | {
         type: "embed";
         symbols: string[];
-        /** several 3D starting geometries (flat [x,y,z,...] each) */
-        seeds: number[][];
-        /** RDKit connectivity, used to gate out geometrically-broken conformers */
-        bonds: { i: number; j: number; order: number }[];
+        /** RDKit's planarity-broken 2D display seed (flat [x,y,z,...]) -- used ONLY as
+         * a fallback when no bond connectivity is available (embed3d needs a bond
+         * graph to build its classical force field; with none, there is nothing for
+         * it to do and we fall back to relaxing this seed directly with ANI-2x). */
+        seed: number[];
+        /** RDKit's real connectivity: the topology embed3d's classical force field is
+         * built from, and that the geometry-validity gate checks against. Empty when
+         * unavailable (e.g. a preset with no explicit bonds). */
+        bonds: FFBond[];
         options: {
           forceTolerance: number;
           maxSteps: number;
@@ -264,95 +224,61 @@ self.onmessage = async (ev: MessageEvent) => {
 
     if (data.type === "embed") {
       if (!provider) throw new Error("optimizer worker: model not initialized");
-      if (data.seeds.length === 0) throw new Error("embed: no seeds provided");
       const reporting = new ReportingProvider(provider, data.epoch);
       const t0 = performance.now();
-      interface Cand {
-        energy: number;
-        positions: Float64Array;
-        maxForce: number;
-        steps: number;
-        converged: boolean;
-        violations: number;
+
+      // Topology-aware classical pre-relax (see @browser-comp-chem/engine's
+      // embed3d): several cheap random-3D-start relaxations of a harmonic-
+      // bond/angle + soft-repulsion force field built from the KNOWN bond
+      // graph, gated for validity, keeping the best untangled conformer. This
+      // replaces "RDKit 2D coords + jitter" as the ANI-2x FIRE polish's
+      // starting point for every molecule size -- no more large-molecule
+      // single-seed branch, since embed3d's multi-start search is cheap
+      // enough (no neural-network evaluations) to run unconditionally.
+      // embed3d needs bonds to build its force field; with none available
+      // (e.g. a preset with no explicit connectivity, or a single free atom)
+      // there is nothing for it to do, so fall back to relaxing the plain
+      // 2D+jitter display seed directly with ANI-2x -- the pre-hardening
+      // behavior for that case.
+      let seedPositions: Float64Array;
+      if (data.bonds.length > 0 && data.symbols.length > 1) {
+        const embedded = await embed3d(data.symbols, data.bonds);
+        seedPositions = embedded.positions;
+        if (!embedded.valid) {
+          // Every classical-relax attempt was flagged by the validity gate --
+          // still hand the ANI-2x polish the least-bad one (it may yet relax
+          // out of it) but note this for anyone watching the worker console.
+          console.warn(
+            `embed3d: no attempt passed the validity gate for ${data.symbols.length} atoms ` +
+              `(best had ${embedded.violations} violation(s)); polishing it with ANI-2x anyway.`,
+          );
+        }
+      } else {
+        seedPositions = Float64Array.from(data.seed);
       }
-      // Best geometrically-VALID conformer (violations 0) by energy; plus a
-      // fallback = fewest violations, then energy, in case every seed is broken.
-      let best: Cand | undefined; // lowest-energy valid
-      let fallback: Cand | undefined; // best-effort if none valid
-      const better = (a: Cand, b: Cand): boolean =>
-        a.violations !== b.violations ? a.violations < b.violations : a.energy < b.energy;
-      // Two-stage search: SCREEN every seed at a coarse tolerance (ranking
-      // conformers doesn't need a tight stationary point), then POLISH only the
-      // winner at the caller's full tolerance. Cuts embed time roughly in half
-      // vs relaxing all seeds tight, with an identical final geometry.
-      const screenTol = Math.max(5e-3, data.options.forceTolerance);
-      for (let s = 0; s < data.seeds.length; s++) {
-        (self as unknown as Worker).postMessage({
-          type: "embed-progress",
-          seed: s,
-          total: data.seeds.length,
-          bestEnergy: best ? best.energy : null,
-          epoch: data.epoch,
-        });
-        const mol: Molecule = {
-          symbols: data.symbols,
-          positions: Float64Array.from(data.seeds[s]!),
-          charge: 0,
-          multiplicity: 1,
-        };
-        const fire = new FireOptimizer({
-          forceTolerance: screenTol,
-          maxSteps: data.options.maxSteps,
-          dtMax: data.options.dtMax,
-        });
-        // Stream each seed's descent (nice live animation of the search); the
-        // reporting provider posts a {step,...} per evaluation.
-        const r = await fire.optimize(mol, reporting);
-        const cand: Cand = {
-          energy: r.energy,
-          positions: r.molecule.positions,
-          maxForce: r.maxForce,
-          steps: r.steps,
-          converged: r.converged,
-          violations: geometryViolations(data.symbols, r.molecule.positions, data.bonds),
-        };
-        if (cand.violations === 0 && (!best || cand.energy < best.energy)) best = cand;
-        if (!fallback || better(cand, fallback)) fallback = cand;
-      }
-      let winner = best ?? fallback;
-      if (!winner) throw new Error("embed: search produced no result");
-      if (screenTol > data.options.forceTolerance) {
-        const polish = new FireOptimizer({
-          forceTolerance: data.options.forceTolerance,
-          maxSteps: data.options.maxSteps,
-          dtMax: data.options.dtMax,
-        });
-        const p = await polish.optimize(
-          { symbols: data.symbols, positions: winner.positions, charge: 0, multiplicity: 1 },
-          reporting,
-        );
-        winner = {
-          energy: p.energy,
-          positions: p.molecule.positions,
-          maxForce: p.maxForce,
-          steps: winner.steps + p.steps,
-          converged: p.converged,
-          violations: geometryViolations(data.symbols, p.molecule.positions, data.bonds),
-        };
-      }
+
+      const fire = new FireOptimizer({
+        forceTolerance: data.options.forceTolerance,
+        maxSteps: data.options.maxSteps,
+        dtMax: data.options.dtMax,
+      });
+      const mol: Molecule = { symbols: data.symbols, positions: seedPositions, charge: 0, multiplicity: 1 };
+      // Stream the ANI-2x polish's descent (the reporting provider posts a
+      // {step,...} per evaluation) so the UI still animates the relaxation live.
+      const result = await fire.optimize(mol, reporting);
+
       const elapsedMs = performance.now() - t0;
-      const finalPos = new Float32Array(winner.positions.length);
-      for (let i = 0; i < finalPos.length; i++) finalPos[i] = winner.positions[i]!;
-      // Reuse the "done" protocol: the main thread adopts the winner as the
-      // geometry and Perturb origin, regardless of which seed the streamed steps
-      // ended on.
+      const finalPos = new Float32Array(result.molecule.positions.length);
+      for (let i = 0; i < finalPos.length; i++) finalPos[i] = result.molecule.positions[i]!;
+      // Reuse the "done" protocol: the main thread adopts the polished
+      // geometry as the current geometry and Perturb origin.
       (self as unknown as Worker).postMessage(
         {
           type: "done",
-          converged: winner.converged,
-          energy: winner.energy,
-          maxForce: winner.maxForce,
-          steps: winner.steps,
+          converged: result.converged,
+          energy: result.energy,
+          maxForce: result.maxForce,
+          steps: result.steps,
           elapsedMs,
           positions: finalPos,
           epoch: data.epoch,

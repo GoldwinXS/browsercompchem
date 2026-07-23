@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { MoleculeView, ATOM_RADII, type ExplicitBond } from "./scene.js";
 import { MOLECULES, MOLECULE_ORDER, DEFAULT_MOLECULE } from "./molecules.js";
-import { smilesToSeed, makeConformerSeeds, SMILES_EXAMPLES, rdkitVersion, type Bond } from "./rdkit.js";
+import { smilesToSeed, SMILES_EXAMPLES, rdkitVersion, type Bond } from "./rdkit.js";
 import { createSketcher, sanitizeSketchSmiles, type JsmeApplet } from "./jsme.js";
 import { distance as measureDistance, angle as measureAngle } from "./measure.js";
 import { EHT_SUPPORTED_ELEMENTS } from "@browser-comp-chem/engine";
@@ -34,10 +34,6 @@ const fireOptions = (atomCount: number) => ({
   dtMax: 0.3,
 });
 const PERTURB_MAX = 0.2; // Angstrom, max per-component displacement seed
-/** Max atom count for the multi-seed conformer search; larger -> single seed. */
-const EMBED_MAX_ATOMS = 30;
-/** Extra structured 3D seeds tried in addition to the plain display seed. */
-const EMBED_EXTRA_SEEDS = 4;
 
 // ---------------------------------------------------------------------------
 // Headless-verifiable state (read by the browser-preview harness).
@@ -725,16 +721,15 @@ async function loadCustomMolecule(smiles: string): Promise<void> {
 
     if (demo.ready) {
       setStatus(`embedding 3D geometry for ${seed.symbols.length} atoms…`);
-      // The seed is a planarity-broken 2D layout; relax it into a real 3D minimum
-      // with ANI-2x. For small molecules run a cheap multi-seed conformer search
-      // (several structured 3D starts, keep the lowest-energy relaxation) to avoid
-      // the bad folded local minima a single tiny-jitter start can fall into.
-      // embed/optimize -> beginRelaxUI keeps the controls locked; do NOT restore.
-      if (seed.symbols.length <= EMBED_MAX_ATOMS) {
-        embed(seed.symbols, seed.positions, seed.bonds);
-      } else {
-        optimize({ embedding: true });
-      }
+      // The seed is a planarity-broken 2D layout; the worker replaces it with a
+      // topology-aware classical pre-relax (embed3d: several cheap random-3D-start
+      // relaxations of a bond/angle/repulsion force field built from RDKit's real
+      // connectivity, gated for validity) BEFORE the ANI-2x FIRE polish, so large
+      // molecules start already untangled instead of folding through themselves
+      // from a 2D-derived seed. Applied uniformly to every molecule size -- no
+      // more atom-count cutoff to a plain single-seed path.
+      // embed -> beginRelaxUI keeps the controls locked; do NOT restore here.
+      embed(seed.symbols, seed.positions, seed.bonds);
     } else {
       // Model not up yet: show the geometry, restore idle controls (Optimize/
       // Perturb stay off until 'ready'; orbitals are model-free so they enable).
@@ -918,7 +913,6 @@ type StepMsg = { type: "step"; step: number; energy: number; maxForce: number; p
 type DoneMsg = { type: "done"; converged: boolean; energy: number; maxForce: number; steps: number; elapsedMs: number; positions: Float32Array; epoch: number };
 type ReadyMsg = { type: "ready"; variant: string; members: number };
 type ErrMsg = { type: "error"; message: string; epoch?: number };
-type EmbedProgressMsg = { type: "embed-progress"; seed: number; total: number; bestEnergy: number | null; epoch: number };
 type VibProgressMsg = { type: "vib-progress"; done: number; total: number; epoch: number };
 type VibDoneMsg = {
   type: "vib-done";
@@ -975,7 +969,6 @@ type WorkerMsg =
   | DoneMsg
   | ReadyMsg
   | ErrMsg
-  | EmbedProgressMsg
   | VibProgressMsg
   | VibDoneMsg
   | OrbDoneMsg
@@ -994,12 +987,6 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     demo.ready = true;
     restoreIdleControls();
     setStatus(`model ready — ${msg.variant}, ${msg.members} members`, "good");
-    return;
-  }
-  if (msg.type === "embed-progress") {
-    const best =
-      msg.bestEnergy === null ? "" : ` (best so far ${msg.bestEnergy.toFixed(4)} Ha)`;
-    setStatus(`conformer search: seed ${msg.seed + 1}/${msg.total}${best}`);
     return;
   }
   if (msg.type === "step") {
@@ -1168,7 +1155,7 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
 };
 
 /**
- * Shared UI prep for any worker relaxation (optimize or multi-seed embed):
+ * Shared UI prep for any worker relaxation (optimize or embed):
  * flips the optimizing flag, clears the readout, disables controls, and starts
  * the live elapsed ticker (main-thread, proves the numerics don't block).
  */
@@ -1191,10 +1178,10 @@ function beginRelaxUI(statusText: string): void {
   requestAnimationFrame(tick);
 }
 
-function optimize(opts: { embedding?: boolean } = {}): void {
+function optimize(): void {
   if (!demo.ready || demo.optimizing) return;
   if (!demo.coverageOK) return; // elements outside ANI-2x -> no energies
-  beginRelaxUI(opts.embedding ? "embedding 3D geometry (ANI-2x)…" : "optimizing…");
+  beginRelaxUI("optimizing…");
   worker.postMessage({
     type: "optimize",
     symbols,
@@ -1205,23 +1192,26 @@ function optimize(opts: { embedding?: boolean } = {}): void {
 }
 
 /**
- * Multi-seed 3D embedding for a freshly-loaded custom molecule: try the plain
- * display seed plus several structured 3D conformer seeds, relax each with
- * ANI-2x + FIRE in the worker, and keep the lowest-energy result (a cheap
- * conformer search that avoids bad folded minima). The worker keeps the lowest-
- * energy result that is also geometrically valid (bonds intact, no clashes) —
- * `bonds` is passed so it can gate out fragmented structures ANI-2x mis-scores.
- * The worker streams each seed's descent and reports which seed won via `done`.
+ * 3D embedding for a freshly-loaded custom molecule. The worker builds a
+ * topology-aware classical force field (harmonic bonds/angles + soft
+ * non-bonded repulsion) from `bonds` -- RDKit's real connectivity -- and
+ * relaxes it from several random 3D starts (engine's embed3d: cheap, no
+ * neural-network evaluations) to get an already-untangled starting geometry,
+ * THEN polishes that with ANI-2x + FIRE. `base` (the planarity-broken 2D
+ * display seed) rides along only as a fallback for the rare case embed3d has
+ * no bonds to work with. Applied to every molecule size -- no atom-count
+ * cutoff -- since the classical pre-relax is cheap regardless of size and is
+ * exactly what keeps a large molecule from folding through itself the way a
+ * bare 2D-derived seed does.
  */
 function embed(embedSymbols: string[], base: ArrayLike<number>, bonds: readonly Bond[]): void {
   if (!demo.ready || demo.optimizing) return;
   if (!demo.coverageOK) return;
-  const seeds = [Array.from(base), ...makeConformerSeeds(base, EMBED_EXTRA_SEEDS)];
-  beginRelaxUI(`embedding 3D geometry (ANI-2x, ${seeds.length}-seed search)…`);
+  beginRelaxUI("embedding 3D geometry (topology-aware classical seed + ANI-2x polish)…");
   worker.postMessage({
     type: "embed",
     symbols: embedSymbols,
-    seeds,
+    seed: Array.from(base),
     bonds: bonds.map((b) => ({ i: b.i, j: b.j, order: b.order })),
     options: fireOptions(embedSymbols.length),
     epoch: geomEpoch,

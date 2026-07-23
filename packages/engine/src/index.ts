@@ -87,3 +87,28 @@ export {
   type MarchingGrid,
   type IsoMesh,
 } from "./isosurface/marchingCubes.js";
+
+// embed3d (topology-aware classical force field + multi-start 3D embedder)
+export {
+  ClassicalForceField,
+  type ForceFieldOptions,
+  type FFBond,
+} from "./embed3d/forceField.js";
+export {
+  embed3d,
+  type Embed3dOptions,
+  type Embed3dResult,
+  type Embed3dAttempt,
+} from "./embed3d/embed3d.js";
+export {
+  countGeometryViolations,
+  tangleMetric,
+  type ValidityOptions,
+  DEFAULT_CLASH_DISTANCE,
+  DEFAULT_BOND_STRETCH_SLACK,
+} from "./embed3d/validity.js";
+export {
+  COVALENT_RADII,
+  covalentRadius,
+  FALLBACK_RADIUS,
+} from "./embed3d/covalentRadii.js";

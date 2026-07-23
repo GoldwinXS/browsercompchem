@@ -200,45 +200,6 @@ export async function smilesToSeed(smiles: string): Promise<SmilesSeed> {
   }
 }
 
-/**
- * Cheap conformer search seeds: from one base layout, generate `count` genuinely-
- * 3D starting geometries by displacing EVERY atom in ALL THREE axes (full-3D
- * isotropic jitter), each seeded deterministically by its index for reproducible
- * loads. Relaxing all of these with ANI-2x + FIRE and keeping the lowest-energy
- * *geometrically-valid* result (see the worker's validity gate) avoids the bad
- * folded local minima a single tiny-jitter start falls into.
- *
- * Why full-3D and not just an out-of-plane "z pucker": RDKit's 2D depiction can
- * place non-bonded atoms pathologically close in the plane (e.g. for the ketone
- * CC(=O)C(C)C a methyl H lands ~1.0 A from the carbonyl O). A z-only nudge keeps
- * that in-plane near-contact, and FIRE then drives an O-H proton transfer that
- * breaks the molecule. Displacing x/y/z together separates such contacts so the
- * relaxation reaches an intact conformer.
- *
- * The amplitude is deliberately MODERATE (grows gently with index): enough to
- * escape the 2D pathology, small enough that most seeds stay connected; the
- * validity gate discards any that still fragment. Connectivity is fixed by RDKit
- * (see `bonds`), so an imperfect conformer never corrupts the drawn topology.
- */
-export function makeConformerSeeds(base: ArrayLike<number>, count: number): number[][] {
-  const n = base.length / 3;
-  const seeds: number[][] = [];
-  for (let s = 0; s < count; s++) {
-    // PRNG seeded by conformer index -> reproducible but distinct per seed.
-    let a = (0x9e3779b9 ^ Math.imul(s + 1, 0x85ebca6b)) >>> 0;
-    const rng = (): number => {
-      a = (Math.imul(a, 1664525) + 1013904223) >>> 0;
-      return a / 4294967296;
-    };
-    // Amplitude grows gently with index for a wider (but still safe) search.
-    const amp = 0.55 + s * 0.12;
-    const pos = new Array<number>(n * 3);
-    for (let i = 0; i < n * 3; i++) pos[i] = base[i]! + (rng() * 2 - 1) * amp;
-    seeds.push(pos);
-  }
-  return seeds;
-}
-
 /** Curated example SMILES that stay within ANI-2x's element set. */
 export const SMILES_EXAMPLES: { name: string; smiles: string }[] = [
   { name: "ethanol", smiles: "CCO" },
