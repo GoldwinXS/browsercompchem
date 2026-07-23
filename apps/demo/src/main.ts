@@ -168,6 +168,30 @@ const vibFreqEl = $("vib-freq");
 const btnVibStop = $<HTMLButtonElement>("vib-stop");
 const vibAmpEl = $<HTMLInputElement>("vib-amp");
 
+// ---------------------------------------------------------------------------
+// Persisted view preferences (auto-rotate, ray tracing). localStorage can be
+// unavailable (private windows, blocked storage) — every access is best-effort.
+// ---------------------------------------------------------------------------
+const PREF_AUTOROTATE = "bcc.pref.autoRotate";
+const PREF_RT = "bcc.pref.rt";
+
+function readPref(key: string): boolean | null {
+  try {
+    const v = localStorage.getItem(key);
+    return v === null ? null : v === "1";
+  } catch {
+    return null;
+  }
+}
+
+function writePref(key: string, on: boolean): void {
+  try {
+    localStorage.setItem(key, on ? "1" : "0");
+  } catch {
+    // best-effort only
+  }
+}
+
 for (const key of MOLECULE_ORDER) {
   const opt = document.createElement("option");
   opt.value = key;
@@ -274,7 +298,7 @@ function initWebGL(): boolean {
 
     controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.autoRotate = true; // keep it alive
+    controls.autoRotate = false; // off by default; opt-in via the persisted checkbox
     controls.autoRotateSpeed = 1.2;
 
     // Ray tracer is optional; wire it lazily so a failure here can't kill UI.
@@ -292,27 +316,22 @@ async function initRaytracer(): Promise<void> {
     // ReSTIR re-enabled: the v0.6.0 duplicate-`luminance` shader bug that forced
     // a black image is fixed in three-realtime-rt >= 0.6.1.
     //
-    // The tracer IGNORES THREE.AmbientLight — its procedural sky IS the ambient
-    // source for GI rays that escape the scene. Without a sky, shadowed atom
-    // faces get no fill and read as black. Enable a neutral studio-grey sky
-    // (also becomes the background, replacing the near-black void) aligned with
-    // the DirectionalLight added in initWebGL. Values tuned by eye; safe to adjust.
+    // The tracer IGNORES THREE.AmbientLight, and its procedural sky dome is
+    // also the visible BACKGROUND — any dome bright enough to matter drowns the
+    // molecule (user feedback, twice: grey-on-grey). So: no sky at all. The
+    // background stays the black void, and the molecule is carried by the
+    // scene's real lights (two point lights + the DirectionalLight sun) with
+    // envColor/envIntensity as the ambient fill that keeps shadowed faces
+    // readable without painting the backdrop. Values tuned by eye.
     const r = new RealtimeRaytracer(renderer, {
-      sky: {
-        enabled: true,
-        sunDir: new THREE.Vector3(0.5, 0.7, 0.4).normalize(),
-        sunColor: new THREE.Color(1.0, 0.96, 0.9),
-        zenith: new THREE.Color(0.42, 0.46, 0.52),
-        horizon: new THREE.Color(0.62, 0.65, 0.7),
-        intensity: 1.1,
-      },
+      sky: { enabled: false },
     });
-    // The sky is now the primary ambient lever; keep a modest envIntensity too.
     r.envColor = new THREE.Color(0x556688);
     r.envIntensity = 2.2;
     r.compileScene(scene);
     rt = r as unknown as typeof rt;
     (window as unknown as { __rt: unknown }).__rt = r; // debug handle
+    (window as unknown as { __scene: unknown }).__scene = scene; // debug handle
     demo.rtAvailable = true;
   } catch (err) {
     // Fall back to the plain WebGL rasterizer; not a fatal error.
@@ -530,15 +549,24 @@ function resetReadout(): void {
 function perturb(): void {
   const rng = mulberry32(0xc0ffee ^ symbols.length);
   const p = Float32Array.from(basePositions);
+  // Perturb is a demonstrative "kick" — distort the geometry so Optimize visibly
+  // relaxes it back. A fixed amplitude looks fine on a small molecule but is
+  // alarmingly destructive on a large, folded one where non-bonded atoms already
+  // sit close (rings stacked): the same 0.2 A pushes them into visible overlap.
+  // Scale the amplitude down with atom count (~1/sqrt(N)) so big molecules get a
+  // gentle wobble, not a tangle, while small ones keep the full kick.
+  const n = symbols.length || 1;
+  const amp = Math.max(0.06, Math.min(PERTURB_MAX, PERTURB_MAX * Math.sqrt(12 / n)));
   for (let k = 0; k < p.length; k++) {
-    p[k] = p[k]! + (rng() * 2 - 1) * PERTURB_MAX;
+    p[k] = p[k]! + (rng() * 2 - 1) * amp;
   }
   currentPositions = p;
+  demo.positions = Array.from(currentPositions); // keep the headless mirror in sync
   if (view) view.update(currentPositions);
   resetReadout();
   resetVibrations();
   refreshVibButton();
-  setStatus("perturbed — press Optimize to relax", "warn");
+  setStatus(`perturbed (±${amp.toFixed(2)} A) — press Optimize to relax`, "warn");
 }
 
 // ---------------------------------------------------------------------------
@@ -1197,15 +1225,17 @@ smilesInput.addEventListener("keydown", (e) => {
   }
 });
 
-// auto-rotate toggle (default on; degrades gracefully with no controls)
+// auto-rotate toggle (default off; persisted; degrades gracefully with no controls)
 chkAutoRotate.addEventListener("change", () => {
   if (controls) controls.autoRotate = chkAutoRotate.checked;
+  writePref(PREF_AUTOROTATE, chkAutoRotate.checked);
 });
 
-// ray-tracing on/off toggle (falls back to renderer.render when off)
+// ray-tracing on/off toggle (persisted; falls back to renderer.render when off)
 btnToggleRt.addEventListener("click", () => {
   if (!rt) return;
   demo.rtEnabled = !demo.rtEnabled;
+  writePref(PREF_RT, demo.rtEnabled);
   updateRenderReadout();
 });
 
@@ -1237,7 +1267,12 @@ sketchOverlay.addEventListener("click", (e) => {
 });
 
 // Click-to-measure: distinguish a click from an orbit drag by pointer travel.
-if (renderer) {
+// Must be wired from boot() AFTER initWebGL creates the renderer — this module
+// evaluates top-to-bottom before boot() runs, so a bare `if (renderer)` at
+// module scope silently skips attaching the listeners (that was a real bug:
+// measurement dead on every load).
+function wireMeasurePicking(): void {
+  if (!renderer) return;
   let downX = 0;
   let downY = 0;
   let dragged = false;
@@ -1294,14 +1329,19 @@ async function boot(): Promise<void> {
   if (!demo.webgl) {
     noglEl.style.display = "flex";
   }
+  wireMeasurePicking();
   // Load the molecule (adds meshes) BEFORE compiling the ray tracer:
   // three-realtime-rt rejects an empty scene ("no meshes found in scene"),
   // which would otherwise leave us permanently on the raster fallback.
   loadMolecule(DEFAULT_MOLECULE);
+  chkAutoRotate.checked = readPref(PREF_AUTOROTATE) ?? false;
   if (controls) controls.autoRotate = chkAutoRotate.checked;
   if (demo.webgl) {
     await initRaytracer();
   }
+  // Restore the persisted ray-tracing choice only if the tracer actually
+  // initialised; otherwise the raster fallback stands.
+  if (rt) demo.rtEnabled = readPref(PREF_RT) ?? false;
   updateRenderReadout(); // covers the no-WebGL / no-tracer cases too
   loop();
 
