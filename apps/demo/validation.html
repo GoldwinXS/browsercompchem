@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BrowserCompChem — validation</title>
+    <style>
+      :root {
+        --bg: #0d0f16;
+        --panel: #141824;
+        --panel-border: #262c3d;
+        --fg: #d7dce8;
+        --muted: #7f889e;
+        --accent: #5b8cff;
+        --good: #46d18a;
+        --warn: #e6b84a;
+        --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+      }
+      html, body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: var(--mono);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+      main { max-width: 860px; margin: 0 auto; padding: 24px 16px 80px; }
+      h1 {
+        font-size: 15px; font-weight: 600; letter-spacing: 0.04em;
+        text-transform: uppercase; color: var(--muted); margin: 0 0 4px;
+      }
+      h1 b { color: var(--fg); }
+      h2 {
+        font-size: 13px; font-weight: 600; color: var(--accent);
+        margin: 34px 0 8px; letter-spacing: 0.02em;
+      }
+      p { margin: 8px 0; color: var(--fg); }
+      p.note, li { color: var(--muted); }
+      .back { color: var(--accent); text-decoration: none; }
+      .back:hover { text-decoration: underline; }
+      .tablewrap { overflow-x: auto; border: 1px solid var(--panel-border); border-radius: 8px; margin: 10px 0; }
+      table { border-collapse: collapse; width: 100%; min-width: 480px; background: var(--panel); }
+      th, td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--panel-border); white-space: nowrap; }
+      th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+      tr:last-child td { border-bottom: 0; }
+      td.ok { color: var(--good); }
+      td.q { color: var(--warn); }
+      .cite { color: var(--muted); font-size: 11px; white-space: normal; }
+      .summary {
+        border: 1px solid var(--panel-border); border-left: 3px solid var(--accent);
+        background: var(--panel); border-radius: 8px; padding: 10px 14px; margin: 14px 0;
+      }
+      ul { margin: 8px 0; padding-left: 20px; }
+      code {
+        background: var(--panel); border: 1px solid var(--panel-border);
+        border-radius: 4px; padding: 1px 5px; font-size: 12px;
+      }
+      @media (max-width: 640px) { main { padding: 16px 10px 60px; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1><b>BrowserCompChem</b> — validation</h1>
+      <p class="note">
+        <a class="back" href="./">&larr; back to the app</a> &nbsp;·&nbsp; every
+        "computed" number below was produced by this app's engine (fresh run,
+        2026-07-23) and re-checked continuously by its test suite. Sources and
+        fuller notes:
+        <a class="back" href="https://github.com/GoldwinXS/browsercompchem/blob/master/docs/VALIDATION.md">docs/VALIDATION.md</a>,
+        <a class="back" href="https://github.com/GoldwinXS/browsercompchem/blob/master/docs/LITERATURE_VALIDATION.md">docs/LITERATURE_VALIDATION.md</a>.
+      </p>
+
+      <div class="summary">
+        Honest summary: <b>geometries and vibrational frequencies are
+        quantitative</b> (the ML potential reproduces its DFT training target).
+        <b>Orbital energies, IR intensities, and dipoles are qualitative</b> —
+        orderings, degeneracies, selection rules, and band patterns are
+        trustworthy; absolute magnitudes are not, and the app's UI labels this
+        wherever it applies.
+      </div>
+
+      <h2>1 · Potential parity vs TorchANI (reference implementation)</h2>
+      <p class="note">
+        References generated independently with TorchANI ANI-2x (PyTorch,
+        float64, autograd forces). ANI-2x itself is trained to reproduce
+        &omega;B97X DFT, so parity here means "delivers the published
+        DFT-adjacent accuracy."
+      </p>
+      <div class="tablewrap"><table>
+        <tr><th>Molecule</th><th>Atoms</th><th>&Delta;E (Ha)</th><th>max &Delta;force (Ha/&Aring;)</th></tr>
+        <tr><td>water</td><td>3</td><td class="ok">0 (bit-identical)</td><td class="ok">2.9e-10</td></tr>
+        <tr><td>methane</td><td>5</td><td class="ok">0 (bit-identical)</td><td class="ok">9.2e-12</td></tr>
+        <tr><td>aspirin</td><td>21</td><td class="ok">0 (bit-identical)</td><td class="ok">1.1e-9</td></tr>
+        <tr><td>caffeine</td><td>24</td><td class="ok">0 (bit-identical)</td><td class="ok">6.3e-10</td></tr>
+        <tr><td>cholesterol</td><td>74</td><td class="ok">0 (bit-identical)</td><td class="ok">7.1e-10</td></tr>
+        <tr><td>peptide</td><td>129</td><td class="ok">0 (bit-identical)</td><td class="ok">8.5e-10</td></tr>
+      </table></div>
+
+      <h2>2 · Equilibrium geometries (ANI-2x + FIRE)</h2>
+      <div class="tablewrap"><table>
+        <tr><th>Molecule</th><th>Quantity</th><th>Computed</th><th>Experiment</th><th>Source</th></tr>
+        <tr><td>water</td><td>r(O&ndash;H)</td><td>0.9638 &Aring;</td><td>0.9578 &Aring;</td><td class="cite">Hoy &amp; Bunker 1979</td></tr>
+        <tr><td>water</td><td>&ang;(H&ndash;O&ndash;H)</td><td>104.07&deg;</td><td>104.48&deg;</td><td class="cite">same</td></tr>
+        <tr><td>methane</td><td>r(C&ndash;H)</td><td>1.0924 &Aring;</td><td>1.087 &Aring;</td><td class="cite">Hirota 1979</td></tr>
+        <tr><td>methane</td><td>&ang;(H&ndash;C&ndash;H) &times;6</td><td class="ok">109.4712&deg;</td><td>109.471&deg; (Td)</td><td class="cite">symmetry</td></tr>
+        <tr><td>acetylene</td><td>r(C&#8801;C)</td><td>1.2019 &Aring;</td><td>1.203 &Aring;</td><td class="cite">Kuchitsu 1998</td></tr>
+        <tr><td>acetylene</td><td>&ang;(H&ndash;C&ndash;C)</td><td class="ok">179.99&deg;</td><td>180&deg; (linear)</td><td class="cite">symmetry</td></tr>
+        <tr><td>CO<sub>2</sub></td><td>r(C=O)</td><td>1.1650 &Aring;</td><td>1.162 &Aring;</td><td class="cite">Herzberg 1966</td></tr>
+        <tr><td>CO<sub>2</sub></td><td>&ang;(O&ndash;C&ndash;O)</td><td class="ok">180.00&deg;</td><td>180&deg; (linear)</td><td class="cite">symmetry</td></tr>
+        <tr><td>benzene</td><td>r(C&ndash;C) &times;6</td><td>1.3924 &Aring;</td><td>1.397 &Aring;</td><td class="cite">Herzberg 1966</td></tr>
+        <tr><td>benzene</td><td>r(C&ndash;H)</td><td>1.0876 &Aring;</td><td>1.084 &Aring;</td><td class="cite">same</td></tr>
+      </table></div>
+      <p class="note">
+        Bond lengths within 0.003&ndash;0.006 &Aring;; angles within ~0.4&deg;.
+        Linearity and Td/D6h equivalence emerge from the potential, not from
+        imposed symmetry (benzene starts from this repo's own 3D embedder).
+      </p>
+
+      <h2>3 · Harmonic frequencies (water)</h2>
+      <p class="note">
+        Computed values are harmonic; experimental bands are anharmonic
+        fundamentals, a few % lower &mdash; the same offset ab&nbsp;initio
+        harmonic frequencies carry (hence empirical scale factors).
+      </p>
+      <div class="tablewrap"><table>
+        <tr><th>Mode</th><th>Computed (harm.)</th><th>Exp. fundamental</th><th>Exp.-derived harm.</th></tr>
+        <tr><td>bend</td><td>1721 cm<sup>-1</sup></td><td>1595 cm<sup>-1</sup></td><td>~1649 cm<sup>-1</sup></td></tr>
+        <tr><td>sym. stretch</td><td>3815 cm<sup>-1</sup></td><td>3657 cm<sup>-1</sup></td><td>~3832 cm<sup>-1</sup></td></tr>
+        <tr><td>antisym. stretch</td><td>3935 cm<sup>-1</sup></td><td>3756 cm<sup>-1</sup></td><td>~3943 cm<sup>-1</sup></td></tr>
+      </table></div>
+
+      <h2>4 · IR selection rules (CO<sub>2</sub>, the hard test)</h2>
+      <div class="tablewrap"><table>
+        <tr><th>Mode</th><th>Rel. intensity</th><th>Group theory requires</th></tr>
+        <tr><td>sym. stretch (1413)</td><td class="ok">0.00 &mdash; inactive</td><td class="cite">IR-forbidden (centrosymmetric)</td></tr>
+        <tr><td>antisym. stretch (2489)</td><td class="ok">100 &mdash; strongest</td><td class="cite">strongly IR-allowed</td></tr>
+        <tr><td>bend (645, &times;2)</td><td>5.6 each</td><td class="cite">IR-allowed, degenerate pair</td></tr>
+      </table></div>
+      <p class="note">
+        The forbidden mode computes at the numerical noise floor, not just
+        "small." Water: all three modes active (100 / 40.7 / 38.6), as C2v
+        requires. Dipoles: CO<sub>2</sub> 0.0004 D (zero by symmetry); water
+        computes <span style="color:var(--warn)">2.51 D vs the experimental
+        1.85 D</span> &mdash; Mulliken point charges overestimate polarity, so
+        trust the pattern and the zeros, not absolute intensities.
+      </p>
+
+      <h2>5 · Extended H&uuml;ckel orbitals</h2>
+      <div class="tablewrap"><table>
+        <tr><th>Check</th><th>Computed</th><th>Reference</th></tr>
+        <tr><td>benzene e<sub>1g</sub> HOMO degeneracy</td><td class="ok">split 1.6e-5 eV</td><td class="cite">required by D6h</td></tr>
+        <tr><td>benzene EHT HOMO</td><td class="q">&minus;12.81 eV</td><td class="cite">PES vertical IE 9.244 eV &rarr; offset 3.56 eV</td></tr>
+        <tr><td>caffeine EHT HOMO</td><td class="q">&minus;11.88 eV</td><td class="cite">PES 7.95 eV (Dougherty 1978) &rarr; offset 3.93 eV</td></tr>
+        <tr><td>water frontier ordering</td><td class="ok">1b<sub>1</sub> above 3a<sub>1</sub></td><td class="cite">PES assignment (Turner et al.)</td></tr>
+      </table></div>
+      <p class="note">
+        The ~3.5&ndash;4 eV overbinding is EHT's documented systematic offset
+        &mdash; note how consistent it is across two very different molecules.
+        That consistency is why orderings, spacings, degeneracies, and shapes
+        are trustworthy while absolute eV are not; the app says so in its UI
+        rather than presenting orbital energies as ionization energies.
+      </p>
+
+      <h2>6 · Out of scope</h2>
+      <ul>
+        <li>charged species, radicals, metals, transition states, reactions, solvent (outside ANI-2x's domain)</li>
+        <li>absolute IR intensities and dipole magnitudes (section 4)</li>
+        <li>absolute orbital energies (section 5)</li>
+        <li>certified global-minimum conformer searches (the embedder yields a good untangled local minimum)</li>
+      </ul>
+
+      <h2>Reproduce it</h2>
+      <p class="note">
+        <code>git clone github.com/GoldwinXS/browsercompchem</code> &middot;
+        <code>npm install</code> &middot;
+        <code>npm test -w packages/engine</code> (52 tests) &mdash; or just
+        <a class="back" href="./">open the app</a>, load water, optimize, and
+        compare against these tables live.
+      </p>
+    </main>
+  </body>
+</html>

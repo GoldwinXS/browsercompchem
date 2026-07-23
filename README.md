@@ -2,6 +2,10 @@
 
 **Live: https://goldwinxs.github.io/browsercompchem/** — works on desktop and phone, no install, no server, no account. Nothing leaves your browser tab.
 
+**Validation: [computed vs. literature, side by side](docs/VALIDATION.md)** —
+fresh engine numbers against cited experimental values (also linked in-app at
+[/validation.html](https://goldwinxs.github.io/browsercompchem/validation.html)).
+
 A fully client-side computational chemistry workbench — a browser-native
 successor to tools like WebMO. Sketch or paste a molecule, optimize its
 geometry with a machine-learned potential, animate its normal modes, simulate

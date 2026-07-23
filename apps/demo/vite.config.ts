@@ -172,6 +172,14 @@ export default defineConfig({
   // GitHub Pages serves this app at /<repo>/ -- set DEPLOY_BASE there. Dev and
   // plain local builds default to "/", byte-identical to the old behavior.
   base: process.env.DEPLOY_BASE || "/",
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, "index.html"),
+        validation: resolve(__dirname, "validation.html"),
+      },
+    },
+  },
   plugins: [serveModels(), serveRdkit(), serveJsme(), copyStaticAssets()],
   server: {
     host: true, // 0.0.0.0 — reachable over the tailnet

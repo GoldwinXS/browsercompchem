@@ -49,6 +49,11 @@
         font-size: 12px; font-weight: 600; margin: 0 0 10px;
         letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted);
       }
+      #validation-link {
+        float: right; color: var(--accent); text-decoration: none;
+        font-weight: 400; text-transform: none; letter-spacing: 0;
+      }
+      #validation-link:hover { text-decoration: underline; }
       /* Bottom-sheet drag handle: shown only on the mobile layout (see media query). */
       #sheet-handle { display: none; }
       .row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
@@ -297,7 +302,7 @@
     <div id="nogl">no WebGL2 context available in this environment — 3D view disabled; optimization still runs (headless-verifiable).</div>
     <div id="ui">
       <div id="sheet-handle" role="button" tabindex="0" aria-label="Resize panel: tap to cycle size, drag to resize"><span class="grabber"></span></div>
-      <h1>Geometry Optimization · ANI-2x</h1>
+      <h1>Geometry Optimization · ANI-2x <a id="validation-link" href="validation.html" title="Computed values vs experimental literature, with citations">validation</a></h1>
       <div class="row">
         <label for="mol">molecule</label>
         <select id="mol"></select>
