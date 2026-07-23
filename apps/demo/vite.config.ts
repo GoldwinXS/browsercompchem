@@ -148,6 +148,9 @@ export default defineConfig({
     host: true, // 0.0.0.0 — reachable over the tailnet
     port: 8142,
     strictPort: true,
+    // Personal dev server on a trusted LAN/tailnet: accept any Host header so
+    // hostname aliases like http://desktop:8142/ work, not just localhost/IP.
+    allowedHosts: true,
   },
   worker: {
     format: "es",

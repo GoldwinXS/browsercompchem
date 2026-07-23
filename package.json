@@ -18,5 +18,8 @@
   },
   "devDependencies": {
     "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "three-realtime-rt": "^0.6.1"
   }
 }

@@ -278,11 +278,9 @@ async function initRaytracer(): Promise<void> {
   if (!renderer) return;
   try {
     const { RealtimeRaytracer } = await import("three-realtime-rt");
-    // NOTE: three-realtime-rt v0.6.0 has a GLSL bug in its ReSTIR path (the
-    // `luminance` helper is defined twice in the assembled program), which fails
-    // shader compilation and yields an unlit (black) image. A molecule viewer
-    // with a couple of lights doesn't need ReSTIR, so we disable it.
-    const r = new RealtimeRaytracer(renderer, { restir: false, restirGI: false });
+    // ReSTIR re-enabled: the v0.6.0 duplicate-`luminance` shader bug that forced
+    // a black image is fixed in three-realtime-rt >= 0.6.1. Default options.
+    const r = new RealtimeRaytracer(renderer);
     // Ambient environment light so shadowed faces read (the traced path has no
     // free ambient like the rasterizer). Tuned by eye; safe to adjust.
     r.envColor = new THREE.Color(0x556688);
