@@ -80,6 +80,25 @@ export {
   type AoContribution,
 } from "./orbitals/population.js";
 
+// spectra (IR intensities + dipole moment, built on the vibrations + orbitals tiers)
+export {
+  computeDipole,
+  DEBYE_PER_E_ANGSTROM,
+  type DipoleResult,
+} from "./spectra/dipole.js";
+export {
+  computeIRIntensities,
+  IR_KM_PER_MOL_PREFACTOR,
+  type ModeIntensity,
+  type IrIntensityOptions,
+} from "./spectra/irIntensities.js";
+export {
+  computeIRSpectrum,
+  type IRSpectrumOptions,
+  type IRSpectrumCurve,
+  type IRSpectrumResult,
+} from "./spectra/irSpectrum.js";
+
 // isosurface (marching cubes for orbital lobes)
 export {
   marchingCubes,

@@ -3,18 +3,18 @@
  *
  * Drives the live dev server (http://localhost:8142/) with a SEEDED
  * pseudo-random sequence of real UI actions -- switching presets, loading
- * SMILES, perturbing, optimizing, computing vibrations/orbitals, selecting
- * modes/orbitals, changing the isovalue, hiding orbitals, clearing the
- * selection, and clicking atoms to measure -- WITHOUT ever refreshing. After
+ * SMILES, perturbing, optimizing, computing vibrations/orbitals/IR spectra,
+ * selecting modes/orbitals, changing the isovalue, hiding orbitals, clearing
+ * the selection, and clicking atoms to measure -- WITHOUT ever refreshing. After
  * every action it asserts the state-management invariants that the "state not
  * reset" bugs violated:
  *
  *   - demo.symbols.length === the visible atom-mesh count in window.__scene
  *     (a stale worker reply repainting the old molecule breaks this);
  *   - demo.positions contains no NaN/Inf (a stale geometry clobber injects NaN);
- *   - demo.optimizing / vibComputing / orbComputing all return to false, and the
- *     relevant buttons re-enable, once every started compute settles (a stuck
- *     flag or a leaked lock breaks this);
+ *   - demo.optimizing / vibComputing / orbComputing / irComputing all return to
+ *     false, and the relevant buttons re-enable, once every started compute
+ *     settles (a stuck flag or a leaked lock breaks this);
  *   - zero uncaught page errors.
  *
  * To actually exercise the races, a fraction of the compute-starting actions do
@@ -123,8 +123,10 @@ async function main() {
         loading: d.loading,
         vibComputing: d.vibComputing,
         orbComputing: d.orbComputing,
+        irComputing: d.irComputing,
         vibReady: d.vibReady,
         orbReady: d.orbReady,
+        irReady: d.irReady,
         orbSelected: d.orbSelected,
         atomCount: d.atomCount,
         symbolsLen: d.symbols.length,
@@ -135,6 +137,7 @@ async function main() {
         molecule: d.molecule,
         vibFreqLen: d.vibFrequencies.length,
         orbEnergiesLen: d.orbEnergies.length,
+        irModesLen: d.irModes.length,
         atomMeshes,
         dis: {
           mol: dis("mol"),
@@ -144,13 +147,14 @@ async function main() {
           optimize: dis("optimize"),
           vibrations: dis("vibrations"),
           orbitals: dis("orbitals"),
+          ir: dis("ir-compute"),
         },
         molOptions: molEl ? Array.from(molEl.options).map((o) => o.value) : [],
         molValue: molEl ? molEl.value : "",
       };
     });
 
-  const settled = (s) => !s.optimizing && !s.loading && !s.vibComputing && !s.orbComputing;
+  const settled = (s) => !s.optimizing && !s.loading && !s.vibComputing && !s.orbComputing && !s.irComputing;
 
   const waitForSettle = (timeout) =>
     // NB: waitForFunction(fn, arg, options) is positional -- options MUST be the
@@ -158,7 +162,7 @@ async function main() {
     page.waitForFunction(
       () => {
         const d = window.__demo;
-        return d && !d.optimizing && !d.loading && !d.vibComputing && !d.orbComputing;
+        return d && !d.optimizing && !d.loading && !d.vibComputing && !d.orbComputing && !d.irComputing;
       },
       undefined,
       { timeout },
@@ -203,6 +207,7 @@ async function main() {
     if (canRelax && s.dis.perturb) expectEnabled.push("perturb");
     if (s.coverageOK && s.atomCount >= 1 && s.dis.orbitals) expectEnabled.push("orbitals");
     if (canRelax && s.atomCount >= 2 && s.dis.vibrations) expectEnabled.push("vibrations");
+    if (canRelax && s.atomCount >= 2 && s.dis.ir) expectEnabled.push("ir");
     if (s.dis.mol) expectEnabled.push("mol");
     if (s.dis.load) expectEnabled.push("load-smiles");
     if (s.dis.draw) expectEnabled.push("draw");
@@ -218,6 +223,7 @@ async function main() {
     loading: s.loading,
     vibComputing: s.vibComputing,
     orbComputing: s.orbComputing,
+    irComputing: s.irComputing,
   });
 
   // --- action performers -------------------------------------------------
@@ -257,6 +263,10 @@ async function main() {
       case "vibrations":
         record(`compute vibrations (${act.atomCount} atoms)`);
         await clickId("vibrations");
+        return { compute: true };
+      case "ir":
+        record(`compute IR spectrum (${act.atomCount} atoms)`);
+        await clickId("ir-compute");
         return { compute: true };
       case "orbitals":
         record("compute orbitals");
@@ -312,6 +322,7 @@ async function main() {
     if (!s.dis.optimize) acts.push({ kind: "optimize" });
     // Cap Hessian size so the bench stays fast (a real user could go bigger).
     if (!s.dis.vibrations && s.atomCount <= 15) acts.push({ kind: "vibrations", atomCount: s.atomCount });
+    if (!s.dis.ir && s.atomCount <= 15) acts.push({ kind: "ir", atomCount: s.atomCount });
     if (!s.dis.orbitals) acts.push({ kind: "orbitals" });
     if (s.vibReady && s.vibFreqLen > 0) acts.push({ kind: "selVib", nModes: s.vibFreqLen });
     if (s.orbReady && !s.orbComputing && s.orbEnergiesLen > 0) acts.push({ kind: "selOrb", nMO: s.orbEnergiesLen });

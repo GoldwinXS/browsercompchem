@@ -121,6 +121,21 @@
       #spectrum text { fill: var(--muted); font-size: 8px; font-family: var(--mono); }
       #vib-freq { color: var(--fg); font-variant-numeric: tabular-nums; }
 
+      /* --- simulated IR spectrum --- */
+      #ir-status { color: var(--muted); font-size: 11px; margin-top: 8px; min-height: 1.4em; line-height: 1.4; }
+      #ir-status.good { color: var(--good); }
+      #ir-status.warn { color: var(--warn); }
+      #ir-plot {
+        width: 100%; height: 96px; display: block; margin-top: 8px;
+        background: #0b0e15; border: 1px solid var(--panel-border); border-radius: 6px;
+      }
+      #ir-plot .axis { stroke: var(--panel-border); stroke-width: 1; }
+      #ir-plot .curve { fill: none; stroke: var(--accent); stroke-width: 1.6; }
+      #ir-plot .peak { fill: var(--good); }
+      #ir-plot text { fill: var(--muted); font-size: 8px; font-family: var(--mono); }
+      #ir-plot text.peak-label { fill: var(--fg); }
+      #ir-dipole { color: var(--fg); font-variant-numeric: tabular-nums; }
+
       /* --- orbitals: compact sidebar summary --- */
       #orb-status { color: var(--muted); font-size: 11px; margin-top: 8px; min-height: 1.4em; line-height: 1.4; }
       #orb-status.good { color: var(--good); }
@@ -299,9 +314,9 @@
         <div id="vib-status">optimize a molecule, then compute its normal modes</div>
         <svg id="spectrum" viewBox="0 0 300 72" preserveAspectRatio="none" style="display:none"></svg>
         <div id="vib-note" class="plot-label" style="display:none">
-          harmonic vibrational frequencies (positions only). Stick heights are
-          uniform: ANI-2x has no dipole derivatives, so true IR intensities are
-          not available. Click a stick to animate that mode.
+          harmonic vibrational frequencies. Stick heights are uniform here —
+          see "IR spectrum" below for real, symmetry-correct peak intensities.
+          Click a stick to animate that mode.
         </div>
         <div id="vib-mode" style="display:none">
           <div class="sub" style="margin-top:8px">
@@ -312,6 +327,27 @@
             <label class="chk" for="vib-amp">amplitude</label>
             <input type="range" id="vib-amp" min="0.05" max="0.6" step="0.01" value="0.3" style="flex:1; accent-color: var(--accent); cursor: pointer;" />
           </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">IR spectrum</div>
+        <div class="btns">
+          <button id="ir-compute">Compute IR</button>
+        </div>
+        <div id="ir-status">optimize a molecule, then simulate its IR spectrum</div>
+        <svg id="ir-plot" viewBox="0 0 300 96" preserveAspectRatio="none" style="display:none"></svg>
+        <div id="ir-note" class="plot-label" style="display:none">
+          simulated absorbance vs wavenumber: harmonic normal modes (same
+          Hessian as above), Lorentzian-broadened, intensity from
+          finite-differenced EHT-Mulliken dipole derivatives (relative 0-100,
+          scaled to the strongest band). Wavenumber decreases left to right,
+          the conventional IR-spectrum axis direction. Symmetry-forbidden
+          modes (e.g. a centrosymmetric molecule's symmetric stretch) plot at
+          essentially zero.
+        </div>
+        <div class="readout">
+          <span class="k">dipole |μ|</span><span class="v" id="ir-dipole">—</span>
         </div>
       </div>
 

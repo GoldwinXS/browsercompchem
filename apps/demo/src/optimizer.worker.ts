@@ -12,6 +12,7 @@
  *   { type: "vibrations", symbols, positions: number[], epoch }
  *   { type: "orbitals", symbols, positions: number[], epoch }
  *   { type: "orbital-grid", orbitalIndex, isovalue, epoch }
+ *   { type: "irspectrum", symbols, positions: number[], epoch }
  *
  * Protocol (worker -> main):
  *   { type: "ready", variant, members }                                (epoch-independent)
@@ -19,6 +20,7 @@
  *   { type: "done", converged, energy, maxForce, steps, elapsedMs, positions, epoch }
  *   { type: "vib-progress" | "vib-done", ..., epoch }
  *   { type: "orb-done" | "orb-progress" | "orb-grid-done", ..., epoch }
+ *   { type: "ir-progress" | "ir-done", ..., epoch }
  *   { type: "error", message, epoch? }         (epoch omitted only for "init" failures)
  *
  * GEOMETRY EPOCH. Every geometry-bearing request carries the main thread's
@@ -48,6 +50,7 @@ import {
   mullikenCharges,
   orbitalComposition,
   embed3d,
+  computeIRSpectrum,
   type EnergyForceProvider,
   type EnergyForces,
   type Molecule,
@@ -163,7 +166,8 @@ self.onmessage = async (ev: MessageEvent) => {
         orbitalIndex: number;
         isovalue: number;
         epoch: number;
-      };
+      }
+    | { type: "irspectrum"; symbols: string[]; positions: number[]; epoch: number };
 
   // The geometry epoch of this request (undefined only for "init"). Echoed on
   // every reply and used in the catch so even an error respects staleness.
@@ -355,6 +359,80 @@ self.onmessage = async (ev: MessageEvent) => {
           epoch: data.epoch,
         },
         [flatModes.buffer, eqPos.buffer],
+      );
+      return;
+    }
+
+    if (data.type === "irspectrum") {
+      // Simulated IR spectrum: reuses computeNormalModes (same Hessian/relax
+      // path as "vibrations" above -- deliberately duplicated rather than
+      // shared across requests, since either op can be started independently
+      // and each must produce a self-consistent (geometry, modes) pair for
+      // its own reply), then finite-differences EHT-Mulliken dipoles along
+      // each mode to get intensities (packages/engine/src/spectra/*). The EHT
+      // solves are cheap and model-free; only the Hessian needs `provider`.
+      if (!provider) throw new Error("optimizer worker: model not initialized");
+      let mol: Molecule = {
+        symbols: data.symbols,
+        positions: Float64Array.from(data.positions),
+        charge: 0,
+        multiplicity: 1,
+      };
+
+      const t0 = performance.now();
+
+      let maxForce = maxAbs((await provider.energyForces(mol)).forces);
+      let relaxed = false;
+      if (maxForce >= STATIONARY_THRESHOLD) {
+        const fire = new FireOptimizer({
+          forceTolerance: 1e-4,
+          maxSteps: 2000,
+          dtMax: 0.2,
+          maxStep: 0.1,
+        });
+        const r = await fire.optimize(mol, provider);
+        mol = r.molecule;
+        maxForce = r.maxForce;
+        relaxed = true;
+      }
+
+      const nm = await computeNormalModes(mol, provider, {
+        onProgress: (done, total) => {
+          (self as unknown as Worker).postMessage({
+            type: "ir-progress",
+            done,
+            total,
+            epoch: data.epoch,
+          });
+        },
+      });
+
+      const spec = await computeIRSpectrum(mol, nm.modes, nm.frequencies);
+
+      const n3 = mol.positions.length;
+      const eqPos = new Float32Array(n3);
+      for (let i = 0; i < n3; i++) eqPos[i] = mol.positions[i]!;
+      // curve arrays are plain Float64Array already -- transfer them directly.
+      const wavenumbers = spec.curve.wavenumbers;
+      const absorbance = spec.curve.absorbance;
+
+      (self as unknown as Worker).postMessage(
+        {
+          type: "ir-done",
+          modes: spec.modes,
+          wavenumbers,
+          absorbance,
+          dipoleVector: spec.dipole.vector,
+          dipoleMagnitude: spec.dipole.magnitude,
+          isLinear: nm.isLinear,
+          maxResidualTransRot: nm.maxResidualTransRot,
+          maxForce,
+          relaxed,
+          equilibrium: eqPos,
+          elapsedMs: performance.now() - t0,
+          epoch: data.epoch,
+        },
+        [wavenumbers.buffer, absorbance.buffer, eqPos.buffer],
       );
       return;
     }

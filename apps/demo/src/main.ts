@@ -5,7 +5,7 @@ import { MOLECULES, MOLECULE_ORDER, DEFAULT_MOLECULE } from "./molecules.js";
 import { smilesToSeed, SMILES_EXAMPLES, rdkitVersion, type Bond } from "./rdkit.js";
 import { createSketcher, sanitizeSketchSmiles, type JsmeApplet } from "./jsme.js";
 import { distance as measureDistance, angle as measureAngle } from "./measure.js";
-import { EHT_SUPPORTED_ELEMENTS } from "@browser-comp-chem/engine";
+import { EHT_SUPPORTED_ELEMENTS, type ModeIntensity as IrModeIntensity } from "@browser-comp-chem/engine";
 
 /**
  * Interactive geometry-optimization demo.
@@ -94,6 +94,11 @@ interface DemoState {
   orbMeshVisible: boolean; // orbital lobes currently in the scene
   orbCharges: number[]; // Mulliken partial charge per atom (index-aligned)
   orbComposition: { atomIndex: number; aoType: string; weight: number }[][]; // top AO contributors per MO
+  // --- simulated IR spectrum + dipole moment ---
+  irComputing: boolean; // Hessian + dipole-derivative finite-difference running in the worker
+  irReady: boolean; // spectrum available for the current geometry
+  irModes: IrModeIntensity[]; // per-mode frequency + intensity, index-aligned with the modes
+  irDipole: { vector: [number, number, number]; magnitude: number } | null; // Debye
 }
 const demo: DemoState = {
   webgl: false,
@@ -144,6 +149,10 @@ const demo: DemoState = {
   orbMeshVisible: false,
   orbCharges: [],
   orbComposition: [],
+  irComputing: false,
+  irReady: false,
+  irModes: [],
+  irDipole: null,
 };
 (window as unknown as { __demo: DemoState }).__demo = demo;
 
@@ -242,6 +251,11 @@ const orbDiagramEl = $("orb-diagram"); // SVG
 const orbDiagramWrap = $("orb-diagram-wrap");
 const orbTipEl = $("orb-tip");
 const btnOrbClose = $<HTMLButtonElement>("orb-close");
+const btnIr = $<HTMLButtonElement>("ir-compute");
+const irStatusEl = $("ir-status");
+const irPlotEl = $("ir-plot"); // SVG
+const irNoteEl = $("ir-note");
+const irDipoleEl = $("ir-dipole");
 
 // ---------------------------------------------------------------------------
 // Persisted view preferences (auto-rotate, ray tracing). localStorage can be
@@ -495,6 +509,12 @@ let vibLastT = 0; // performance.now() of the previous animation frame
 const VIB_DISPLAY_HZ = 1.1; // visual oscillation rate (decoupled from the real cm^-1)
 const vibScratch = { buf: new Float32Array(0) }; // reused per-frame position buffer
 
+// --- simulated IR spectrum state (separate view mode; independent of the
+// vibrations mode-animation state above, though both are built on the same
+// underlying normal modes computed independently in the worker) ---
+let irCurveWavenumbers: Float64Array<ArrayBufferLike> = new Float64Array(0); // ascending, cm^-1
+let irCurveAbsorbance: Float64Array<ArrayBufferLike> = new Float64Array(0); // index-aligned relative absorbance
+
 // --- orbital isosurface meshes (static between computations). Two translucent
 // lobes read over the ball-and-stick model in the universal chemist's phase
 // convention: a saturated BLUE +lobe and a warm saturated RED-ORANGE -lobe. The
@@ -549,13 +569,14 @@ function lockControlsForCompute(): void {
   btnOptimize.disabled = true;
   btnVibrations.disabled = true;
   btnOrbitals.disabled = true;
+  btnIr.disabled = true;
 }
 
 /**
  * Restore every gated control to its idle state. Optimize/Perturb need the
- * ANI-2x element set (coverageOK); vibrations/orbitals decide via their own
- * allowed() predicates (refreshVibButton/refreshOrbButton read the live flags,
- * so this is correct even while another flag is still settling).
+ * ANI-2x element set (coverageOK); vibrations/orbitals/IR decide via their own
+ * allowed() predicates (refreshVibButton/refreshOrbButton/refreshIrButton read
+ * the live flags, so this is correct even while another flag is still settling).
  */
 function restoreIdleControls(): void {
   molSelect.disabled = false;
@@ -566,6 +587,7 @@ function restoreIdleControls(): void {
   btnOptimize.disabled = !canRelax;
   refreshVibButton();
   refreshOrbButton();
+  refreshIrButton();
 }
 
 /**
@@ -577,8 +599,9 @@ function restoreIdleControls(): void {
  *    geometry is dropped, and locally clear the busy flags for those abandoned
  *    ops (their completions will never arrive to clear them);
  *  - clear the optimization readout + energy plot;
- *  - invalidate vibrations (modes/animation) and orbitals (data + lobe meshes),
- *    preserving the existing "invalidate on motion" semantics;
+ *  - invalidate vibrations (modes/animation), orbitals (data + lobe meshes),
+ *    and the IR spectrum (modes/curve/dipole), preserving the existing
+ *    "invalidate on motion" semantics;
  *  - clear any warning;
  *  - clear the selection/markers (skipped for perturb, which keeps the same
  *    atoms and so keeps the measurement).
@@ -593,6 +616,7 @@ function resetForNewGeometry(opts: { keepSelection?: boolean } = {}): void {
   resetReadout();
   resetVibrations(); // clears demo.vibComputing (abandoned Hessian)
   resetOrbitals(); // clears demo.orbComputing + lobe meshes (abandoned solve/grid)
+  resetIR(); // clears demo.irComputing (abandoned Hessian + dipole finite differences)
   // The abandoned op's completion reply is now stale and will be dropped, so it
   // can never restore the controls it locked -- restore them here. A caller that
   // is about to start a fresh op on this new geometry (loadCustomMolecule ->
@@ -687,7 +711,7 @@ async function loadCustomMolecule(smiles: string): Promise<void> {
   // sketcher modal can outlive the click that opened it, so guard explicitly:
   // the stale-epoch gate would drop the old op's reply, yet cleanly refusing is
   // clearer than racing.
-  if (demo.optimizing || demo.vibComputing || demo.orbComputing || demo.loading) return;
+  if (demo.optimizing || demo.vibComputing || demo.orbComputing || demo.irComputing || demo.loading) return;
   setWarn("");
   // Lock the geometry/compute controls for the whole async parse so a dropdown
   // switch or second Load can't interleave with the awaited RDKit calls. The
@@ -946,6 +970,23 @@ type OrbDoneMsg = {
   composition: OrbContribution[][];
   elapsedMs: number;
 };
+type IrProgressMsg = { type: "ir-progress"; done: number; total: number; epoch: number };
+type IrDoneMsg = {
+  type: "ir-done";
+  modes: IrModeIntensity[];
+  wavenumbers: Float64Array;
+  absorbance: Float64Array;
+  dipoleVector: [number, number, number];
+  dipoleMagnitude: number;
+  isLinear: boolean;
+  maxResidualTransRot: number;
+  maxForce: number;
+  relaxed: boolean;
+  equilibrium: Float32Array;
+  elapsedMs: number;
+  epoch: number;
+};
+
 type OrbProgressMsg = { type: "orb-progress"; epoch: number; done: number; total: number };
 type OrbGridDoneMsg = {
   type: "orb-grid-done";
@@ -973,7 +1014,9 @@ type WorkerMsg =
   | VibDoneMsg
   | OrbDoneMsg
   | OrbProgressMsg
-  | OrbGridDoneMsg;
+  | OrbGridDoneMsg
+  | IrProgressMsg
+  | IrDoneMsg;
 
 worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
   const msg = ev.data;
@@ -1067,6 +1110,7 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     demo.positions = Array.from(currentPositions);
     moveAtoms(currentPositions);
     resetOrbitals(); // equilibrium may have shifted -> any orbitals are stale
+    resetIR(); // ...and any computed IR spectrum
     refreshOrbButton();
 
     drawSpectrum();
@@ -1138,6 +1182,49 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     );
     return;
   }
+  if (msg.type === "ir-progress") {
+    setIrStatus(`computing Hessian… ${msg.done}/${msg.total} force columns`);
+    return;
+  }
+  if (msg.type === "ir-done") {
+    demo.irComputing = false;
+    demo.irModes = msg.modes;
+    demo.irDipole = { vector: msg.dipoleVector, magnitude: msg.dipoleMagnitude };
+    demo.irReady = true;
+    irCurveWavenumbers = Float64Array.from(msg.wavenumbers);
+    irCurveAbsorbance = Float64Array.from(msg.absorbance);
+
+    // Adopt the (possibly further-relaxed) equilibrium, mirroring vib-done:
+    // the atoms actually oscillate about this geometry, and Perturb should
+    // start from it too.
+    currentPositions = Float32Array.from(msg.equilibrium);
+    basePositions = Float64Array.from(msg.equilibrium);
+    demo.positions = Array.from(currentPositions);
+    moveAtoms(currentPositions);
+    if (demo.selected.length) {
+      syncMarkers();
+      updateMeasureReadout();
+    }
+    resetVibrations(); // equilibrium may have shifted -> any vibrational modes are stale
+    resetOrbitals(); // ...and any computed orbitals
+    refreshVibButton();
+    refreshOrbButton();
+
+    drawIrSpectrum();
+    irPlotEl.style.display = "block";
+    irNoteEl.style.display = "block";
+    irDipoleEl.textContent = `${demo.irDipole.magnitude.toFixed(2)} D`;
+    restoreIdleControls();
+
+    const nActive = demo.irModes.filter((m) => m.isActive).length;
+    const relaxNote = msg.relaxed ? " (relaxed to stationary point first)" : "";
+    setIrStatus(
+      `${demo.irModes.length} modes, ${nActive} IR-active, |μ| = ${demo.irDipole.magnitude.toFixed(2)} D ` +
+        `in ${msg.elapsedMs.toFixed(0)} ms.${relaxNote}`,
+      "good",
+    );
+    return;
+  }
   if (msg.type === "error") {
     // Stale-op errors were already dropped by the epoch gate at the top; an
     // error that reaches here belongs to the current geometry (or is an
@@ -1147,10 +1234,12 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     demo.optimizing = false;
     demo.vibComputing = false;
     demo.orbComputing = false;
+    demo.irComputing = false;
     restoreIdleControls();
     setStatus(`error: ${msg.message}`, "warn");
     setVibStatus(`error: ${msg.message}`, "warn");
     if (demo.orbReady || msg.message.includes("orbital")) setOrbStatus(`error: ${msg.message}`, "warn");
+    setIrStatus(`error: ${msg.message}`, "warn");
   }
 };
 
@@ -1162,6 +1251,7 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
 function beginRelaxUI(statusText: string): void {
   resetVibrations(); // geometry is about to move; any modes become stale
   resetOrbitals(); // ...and any computed orbitals
+  resetIR(); // ...and any computed IR spectrum
   demo.optimizing = true;
   demo.done = false;
   demo.energies = [];
@@ -1230,7 +1320,14 @@ function setVibStatus(text: string, cls: "" | "good" | "warn" = ""): void {
 
 /** Whether normal-mode analysis is currently allowed for the loaded molecule. */
 function vibAllowed(): boolean {
-  return demo.ready && demo.coverageOK && demo.atomCount >= 2 && !demo.optimizing && !demo.vibComputing;
+  return (
+    demo.ready &&
+    demo.coverageOK &&
+    demo.atomCount >= 2 &&
+    !demo.optimizing &&
+    !demo.vibComputing &&
+    !demo.irComputing // both use the ANI-2x Hessian path; don't run two at once
+  );
 }
 
 function refreshVibButton(): void {
@@ -1261,6 +1358,7 @@ function computeVibrations(): void {
   if (!vibAllowed()) return;
   resetVibrations();
   resetOrbitals(); // the worker may relax first -> any orbitals become stale
+  resetIR(); // ...and any computed IR spectrum
   demo.vibComputing = true; // set AFTER resetVibrations (which clears it)
   lockControlsForCompute();
   setVibStatus("computing Hessian (6N force evals, off-thread)…");
@@ -1395,6 +1493,141 @@ function stopVibAnimation(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Simulated IR spectrum + dipole moment (separate view state -- does not
+// disturb the vibrations or optimize flows). The worker reuses the same
+// Hessian/normal-mode pipeline as "vibrations", then finite-differences
+// EHT-Mulliken dipoles along each mode to get intensities. Here we draw the
+// Lorentzian-broadened spectrum curve and the dipole readout.
+// ---------------------------------------------------------------------------
+function setIrStatus(text: string, cls: "" | "good" | "warn" = ""): void {
+  irStatusEl.textContent = text;
+  irStatusEl.className = cls;
+}
+
+/** Whether an IR-spectrum solve is currently allowed for the loaded molecule.
+ * Needs BOTH the ANI-2x Hessian (coverageOK) and the EHT-Mulliken dipole
+ * (ehtCoverage) -- same element set today, but each is asserted for the
+ * reason it is actually needed rather than assumed identical forever. Mutually
+ * exclusive with vibrations/orbitals (see vibAllowed/orbAllowed): all three
+ * ultimately share the same worker + `provider`. */
+function irAllowed(): boolean {
+  return (
+    demo.ready &&
+    demo.coverageOK &&
+    ehtCoverage() &&
+    demo.atomCount >= 2 &&
+    !demo.optimizing &&
+    !demo.vibComputing &&
+    !demo.orbComputing &&
+    !demo.irComputing
+  );
+}
+
+function refreshIrButton(): void {
+  btnIr.disabled = !irAllowed();
+}
+
+/** Clear any computed IR spectrum (called when the geometry changes, or
+ * whenever vibrations/orbitals/optimize is about to (re)compute and might move
+ * the geometry). Also clears demo.irComputing: a geometry change abandons any
+ * in-flight solve (its ir-done will be dropped as stale, so nothing else would
+ * clear the flag). */
+function resetIR(): void {
+  demo.irComputing = false;
+  demo.irReady = false;
+  demo.irModes = [];
+  demo.irDipole = null;
+  irCurveWavenumbers = new Float64Array(0);
+  irCurveAbsorbance = new Float64Array(0);
+  irPlotEl.style.display = "none";
+  irNoteEl.style.display = "none";
+  irPlotEl.innerHTML = "";
+  irDipoleEl.textContent = "—";
+}
+
+/** Kick off an IR-spectrum computation in the worker. */
+function computeIR(): void {
+  if (!irAllowed()) return;
+  resetIR();
+  resetVibrations(); // the worker may relax first -> any vibrational modes become stale
+  resetOrbitals(); // ...and any computed orbitals
+  demo.irComputing = true; // set AFTER the resets (which clear it)
+  lockControlsForCompute();
+  setIrStatus("computing IR spectrum (Hessian + dipole finite differences, off-thread)…");
+  worker.postMessage({
+    type: "irspectrum",
+    symbols,
+    positions: Array.from(currentPositions),
+    epoch: geomEpoch,
+  });
+}
+
+// --- IR plot geometry (viewBox 0 0 300 96); wavenumber DECREASES left to
+// right, the conventional IR-spectrum axis direction (see engine/spectra/
+// irSpectrum.ts's docstring). ---
+const IR_W = 300;
+const IR_H = 96;
+const IR_L = 6; // left margin
+const IR_R = 8; // right margin
+const IR_TOP = 12; // plot top (100% relative intensity)
+const IR_BASE = 78; // baseline (axis, 0% intensity) y
+
+function irFreqToX(wavenumber: number, min: number, max: number): number {
+  const frac = max > min ? (wavenumber - min) / (max - min) : 0;
+  return IR_L + (1 - frac) * (IR_W - IR_L - IR_R); // high wavenumber -> small x
+}
+
+/** Draw the broadened IR spectrum curve, with the top few active bands labeled. */
+function drawIrSpectrum(): void {
+  const wn = irCurveWavenumbers;
+  const ab = irCurveAbsorbance;
+  if (!wn.length) {
+    irPlotEl.innerHTML = "";
+    return;
+  }
+  const min = wn[0]!;
+  const max = wn[wn.length - 1]!;
+  const plotH = IR_BASE - IR_TOP;
+  const parts: string[] = [];
+
+  parts.push(`<line class="axis" x1="${IR_L}" y1="${IR_BASE}" x2="${IR_W - IR_R}" y2="${IR_BASE}" />`);
+  const tickStart = Math.ceil(min / 500) * 500;
+  for (let t = tickStart; t <= max; t += 500) {
+    const x = irFreqToX(t, min, max);
+    parts.push(`<line class="axis" x1="${x.toFixed(1)}" y1="${IR_BASE}" x2="${x.toFixed(1)}" y2="${IR_BASE + 3}" />`);
+    parts.push(`<text x="${x.toFixed(1)}" y="${IR_H - 4}" text-anchor="middle">${t}</text>`);
+  }
+  parts.push(`<text x="${IR_L}" y="${IR_TOP - 2}" text-anchor="start">cm⁻¹</text>`);
+
+  // Broadened curve: one path vertex per grid sample (already Lorentzian-summed
+  // by the engine); absorbance clamped to the 0-100 relative scale visually
+  // (overlapping bands can sum slightly above 100).
+  let d = "";
+  for (let i = 0; i < wn.length; i++) {
+    const x = irFreqToX(wn[i]!, min, max);
+    const y = IR_BASE - Math.min(1, ab[i]! / 100) * plotH;
+    d += `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)} `;
+  }
+  parts.push(`<path class="curve" d="${d}" />`);
+
+  // Label the top few active bands (strongest first).
+  const labeled = demo.irModes
+    .filter((m) => m.isActive)
+    .sort((a, b) => b.relative - a.relative)
+    .slice(0, 4);
+  for (const m of labeled) {
+    const x = irFreqToX(Math.abs(m.frequency), min, max);
+    const y = IR_BASE - Math.min(1, m.relative / 100) * plotH;
+    parts.push(`<circle class="peak" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2" />`);
+    parts.push(
+      `<text class="peak-label" x="${x.toFixed(1)}" y="${Math.max(IR_TOP - 2, y - 5).toFixed(1)}" text-anchor="middle">${Math.abs(m.frequency).toFixed(0)}</text>`,
+    );
+  }
+
+  irPlotEl.innerHTML = parts.join("");
+}
+
+// ---------------------------------------------------------------------------
 // Extended Hückel molecular orbitals (separate view state). The worker runs the
 // EHT solve (fast, model-free) and, on demand, evaluates a chosen MO's psi on a
 // grid and marches it into +/- isosurface meshes. Here we draw the energy
@@ -1412,7 +1645,14 @@ function ehtCoverage(): boolean {
 
 /** Whether an EHT solve is currently allowed for the loaded molecule. */
 function orbAllowed(): boolean {
-  return ehtCoverage() && demo.atomCount >= 1 && !demo.optimizing && !demo.orbComputing && !demo.vibComputing;
+  return (
+    ehtCoverage() &&
+    demo.atomCount >= 1 &&
+    !demo.optimizing &&
+    !demo.orbComputing &&
+    !demo.vibComputing &&
+    !demo.irComputing // IR runs its own internal EHT solves; keep them serialized
+  );
 }
 
 function refreshOrbButton(): void {
@@ -1966,6 +2206,30 @@ function clearSketch(): void {
   }),
 };
 
+// Headless-verification handle for the IR-spectrum flow: drive the compute
+// without a mouse, and inspect the per-mode intensities, dipole, and broadened
+// curve so a harness can confirm real (non-empty, symmetry-correct) output.
+(window as unknown as {
+  __ir: {
+    compute: () => void;
+    ready: () => boolean;
+    computing: () => boolean;
+    modes: () => IrModeIntensity[];
+    dipole: () => { vector: [number, number, number]; magnitude: number } | null;
+    curve: () => { wavenumbers: number[]; absorbance: number[] };
+  };
+}).__ir = {
+  compute: computeIR,
+  ready: () => demo.irReady,
+  computing: () => demo.irComputing,
+  modes: () => demo.irModes.slice(),
+  dipole: () => demo.irDipole,
+  curve: () => ({
+    wavenumbers: Array.from(irCurveWavenumbers),
+    absorbance: Array.from(irCurveAbsorbance),
+  }),
+};
+
 // Headless-verification handle for the click-to-measure flow: toggle/clear the
 // selection by atom index (the exact code path a canvas click runs, via
 // toggleAtom) so the state-fuzz bench can exercise selection/markers without
@@ -2029,6 +2293,9 @@ spectrumEl.addEventListener("click", (e) => {
   const attr = target?.getAttribute?.("data-mode");
   if (attr !== null && attr !== undefined) selectMode(Number(attr));
 });
+
+// simulated IR spectrum + dipole moment
+btnIr.addEventListener("click", () => computeIR());
 
 // extended Hückel orbitals
 btnOrbitals.addEventListener("click", () => computeOrbitals());
