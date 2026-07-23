@@ -49,6 +49,8 @@
         font-size: 12px; font-weight: 600; margin: 0 0 10px;
         letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted);
       }
+      /* Bottom-sheet drag handle: shown only on the mobile layout (see media query). */
+      #sheet-handle { display: none; }
       .row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
       label { color: var(--muted); }
       select, button {
@@ -247,11 +249,44 @@
       @media (max-width: 640px) {
         #ui {
           top: auto; bottom: 0; left: 0; right: 0; width: auto;
-          max-height: 48vh; border-radius: 12px 12px 0 0;
+          border-radius: 16px 16px 0 0;
           border-left: 0; border-right: 0; border-bottom: 0;
-          padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+          padding: 0 14px calc(12px + env(safe-area-inset-bottom));
+          transition: max-height 0.28s cubic-bezier(0.4, 0, 0.2, 1);
         }
-        button.mini { padding: 6px 11px; }
+        /* Three snap heights. Tap the handle to cycle; drag it to resize freely
+           (the sheet snaps to the nearest of these on release). Default = half. */
+        #ui:not([data-sheet]),
+        #ui[data-sheet="half"] { max-height: 54vh; }
+        #ui[data-sheet="peek"] { max-height: 16vh; }
+        #ui[data-sheet="full"] { max-height: 90vh; }
+
+        /* Sticky grab handle pinned to the top of the sheet while content scrolls. */
+        #sheet-handle {
+          display: flex; align-items: center; justify-content: center;
+          position: sticky; top: 0; z-index: 6;
+          height: 38px; margin: 0 -14px 2px; padding-top: 2px;
+          background: rgba(20, 24, 36, 0.96);
+          border-radius: 16px 16px 0 0;
+          cursor: grab; touch-action: none; -webkit-tap-highlight-color: transparent;
+        }
+        #sheet-handle:active { cursor: grabbing; }
+        #sheet-handle .grabber {
+          width: 44px; height: 5px; border-radius: 3px;
+          background: var(--muted); opacity: 0.55;
+        }
+        #ui h1 { margin-top: 2px; }
+
+        /* Finger-sized targets. 16px inputs stop iOS Safari from zooming on focus. */
+        #ui { font-size: 13px; }
+        .btns button, .row button, #load-smiles, #open-sketch,
+        .section > .btns button, button.primary {
+          min-height: 44px;
+        }
+        select, input.text, input[type="text"] { min-height: 44px; font-size: 16px; }
+        button.mini { min-height: 36px; padding: 8px 12px; }
+        input[type="range"] { height: 32px; }
+
         #orb-modal { padding: 14px; }
         #orb-diagram { font-size: 9px; }
       }
@@ -261,6 +296,7 @@
     <div id="app"></div>
     <div id="nogl">no WebGL2 context available in this environment — 3D view disabled; optimization still runs (headless-verifiable).</div>
     <div id="ui">
+      <div id="sheet-handle" role="button" tabindex="0" aria-label="Resize panel: tap to cycle size, drag to resize"><span class="grabber"></span></div>
       <h1>Geometry Optimization · ANI-2x</h1>
       <div class="row">
         <label for="mol">molecule</label>
@@ -439,6 +475,61 @@
       </div>
     </div>
 
+    <script>
+      /* Mobile bottom-sheet handle: tap cycles peek -> half -> full; drag resizes
+         and snaps to the nearest detent on release. Pure DOM/layout, isolated from
+         the app module (no import, no app state) so it cannot affect optimization,
+         the worker epoch, or any control the fuzz bench drives. Mobile only. */
+      (function () {
+        var ui = document.getElementById("ui");
+        var handle = document.getElementById("sheet-handle");
+        if (!ui || !handle) return;
+        var order = ["peek", "half", "full"];
+        var mq = window.matchMedia("(max-width: 640px)");
+        function fracs() { var vh = window.innerHeight; return { peek: vh * 0.16, half: vh * 0.54, full: vh * 0.9 }; }
+        function set(s) { ui.style.maxHeight = ""; ui.setAttribute("data-sheet", s); }
+        function ensure() { if (mq.matches && !ui.getAttribute("data-sheet")) set("half"); }
+        ensure();
+        if (mq.addEventListener) mq.addEventListener("change", ensure);
+
+        var startY = null, startH = 0, moved = 0;
+        handle.addEventListener("pointerdown", function (e) {
+          if (!mq.matches) return;
+          startY = e.clientY; startH = ui.getBoundingClientRect().height; moved = 0;
+          ui.style.transition = "none";
+          try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+        });
+        handle.addEventListener("pointermove", function (e) {
+          if (startY === null) return;
+          var dy = startY - e.clientY; // drag up = taller
+          moved = Math.max(moved, Math.abs(dy));
+          var vh = window.innerHeight;
+          ui.style.maxHeight = Math.max(vh * 0.1, Math.min(vh * 0.92, startH + dy)) + "px";
+        });
+        function end() {
+          if (startY === null) return;
+          ui.style.transition = "";
+          if (moved < 6) {
+            var cur = ui.getAttribute("data-sheet") || "half";
+            set(order[(order.indexOf(cur) + 1) % order.length]);
+          } else {
+            var h = ui.getBoundingClientRect().height, f = fracs(), best = "half", bd = Infinity;
+            for (var k in f) { var d = Math.abs(f[k] - h); if (d < bd) { bd = d; best = k; } }
+            set(best);
+          }
+          startY = null;
+        }
+        handle.addEventListener("pointerup", end);
+        handle.addEventListener("pointercancel", end);
+        handle.addEventListener("keydown", function (e) {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            var cur = ui.getAttribute("data-sheet") || "half";
+            set(order[(order.indexOf(cur) + 1) % order.length]);
+          }
+        });
+      })();
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
