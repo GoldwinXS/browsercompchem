@@ -91,6 +91,8 @@ interface DemoState {
   orbSelected: number | null; // MO whose isosurface is displayed
   orbIsovalue: number; // isosurface level (atomic units)
   orbMeshVisible: boolean; // orbital lobes currently in the scene
+  orbCharges: number[]; // Mulliken partial charge per atom (index-aligned)
+  orbComposition: { atomIndex: number; aoType: string; weight: number }[][]; // top AO contributors per MO
 }
 const demo: DemoState = {
   webgl: false,
@@ -138,8 +140,21 @@ const demo: DemoState = {
   orbSelected: null,
   orbIsovalue: 0.05,
   orbMeshVisible: false,
+  orbCharges: [],
+  orbComposition: [],
 };
 (window as unknown as { __demo: DemoState }).__demo = demo;
+
+/**
+ * Monotonic epoch for the orbitals pipeline. Bumped on every resetOrbitals (i.e.
+ * any geometry change or fresh compute). Each "orbitals"/"orbital-grid" request
+ * carries the current epoch and the worker echoes it back; a response whose epoch
+ * no longer matches is stale (the molecule changed after it was requested) and is
+ * dropped. This is the fix for the "switch molecule mid-solve leaves the previous
+ * molecule's ladder/lobes on screen" bug -- an in-flight water response must not
+ * repaint itself over methane.
+ */
+let orbEpoch = 0;
 
 /** Elements the extended-Hückel tier can parametrize (same set as ANI-2x). */
 const EHT_SET = new Set(EHT_SUPPORTED_ELEMENTS);
@@ -202,13 +217,25 @@ const btnVibStop = $<HTMLButtonElement>("vib-stop");
 const vibAmpEl = $<HTMLInputElement>("vib-amp");
 const btnOrbitals = $<HTMLButtonElement>("orbitals");
 const orbStatusEl = $("orb-status");
-const orbLadderEl = $("orb-ladder"); // SVG
-const orbNoteEl = $("orb-note");
+const orbSummaryEl = $("orb-summary");
+const orbHomoEEl = $("orb-homo-e");
+const orbLumoEEl = $("orb-lumo-e");
+const orbGapEEl = $("orb-gap-e");
+const orbGapNmEl = $("orb-gap-nm");
+const orbChargesEl = $("orb-charges");
+const btnOrbView = $<HTMLButtonElement>("orb-view");
 const orbDetailEl = $("orb-detail");
 const orbSelEl = $("orb-sel");
+const orbCompEl = $("orb-comp");
 const btnOrbClear = $<HTMLButtonElement>("orb-clear");
 const orbIsoEl = $<HTMLInputElement>("orb-iso");
 const orbIsoValEl = $("orb-iso-val");
+// Expanded MO-diagram modal (reuses the JSME sketch-modal visual language).
+const orbOverlay = $("orb-overlay");
+const orbDiagramEl = $("orb-diagram"); // SVG
+const orbDiagramWrap = $("orb-diagram-wrap");
+const orbTipEl = $("orb-tip");
+const btnOrbClose = $<HTMLButtonElement>("orb-close");
 
 // ---------------------------------------------------------------------------
 // Persisted view preferences (auto-rotate, ray tracing). localStorage can be
@@ -463,24 +490,36 @@ const VIB_DISPLAY_HZ = 1.1; // visual oscillation rate (decoupled from the real 
 const vibScratch = { buf: new Float32Array(0) }; // reused per-frame position buffer
 
 // --- orbital isosurface meshes (static between computations). Two translucent
-// lobes read over the ball-and-stick model: accent-blue +lobe, warm-gold -lobe.
+// lobes read over the ball-and-stick model in the universal chemist's phase
+// convention: a saturated BLUE +lobe and a warm saturated RED-ORANGE -lobe. The
+// old accent-blue/gold pair washed out to pale/cream over the black background at
+// 0.45 opacity (user feedback); these are more saturated, carry a matching
+// emissive tint so the phase still reads on faces the light misses, and sit a
+// touch more opaque. The red-orange is shifted off pure red so the big
+// translucent lobe is never mistaken for the small opaque CPK-red oxygen sphere.
+const LOBE_POS_COLOR = 0x3b7cff; // + phase (blue)
+const LOBE_NEG_COLOR = 0xff5a2c; // - phase (warm red-orange)
 let orbPosMesh: THREE.Mesh | undefined;
 let orbNegMesh: THREE.Mesh | undefined;
 const orbPosMat = new THREE.MeshPhysicalMaterial({
-  color: 0x5b8cff,
+  color: LOBE_POS_COLOR,
+  emissive: 0x0e2f8c, // deep-blue self-tint so shadowed faces still read as "+"
+  emissiveIntensity: 0.45,
   metalness: 0.0,
-  roughness: 0.35,
+  roughness: 0.3,
   transparent: true,
-  opacity: 0.45,
+  opacity: 0.55,
   side: THREE.DoubleSide,
   depthWrite: false, // let the molecule read through the translucent lobe
 });
 const orbNegMat = new THREE.MeshPhysicalMaterial({
-  color: 0xe6b84a,
+  color: LOBE_NEG_COLOR,
+  emissive: 0x8c1e05, // deep warm self-tint so shadowed faces still read as "-"
+  emissiveIntensity: 0.45,
   metalness: 0.0,
-  roughness: 0.35,
+  roughness: 0.3,
   transparent: true,
-  opacity: 0.45,
+  opacity: 0.55,
   side: THREE.DoubleSide,
   depthWrite: false,
 });
@@ -804,8 +843,10 @@ type VibDoneMsg = {
   elapsedMs: number;
 };
 
+type OrbContribution = { atomIndex: number; aoType: string; weight: number };
 type OrbDoneMsg = {
   type: "orb-done";
+  epoch: number;
   energies: number[];
   occupations: number[];
   homoIndex: number;
@@ -815,11 +856,14 @@ type OrbDoneMsg = {
   nElectrons: number;
   singular: boolean;
   droppedCount: number;
+  charges: number[];
+  composition: OrbContribution[][];
   elapsedMs: number;
 };
-type OrbProgressMsg = { type: "orb-progress"; done: number; total: number };
+type OrbProgressMsg = { type: "orb-progress"; epoch: number; done: number; total: number };
 type OrbGridDoneMsg = {
   type: "orb-grid-done";
+  epoch: number;
   orbitalIndex: number;
   isovalue: number;
   maxAbsPsi: number;
@@ -978,16 +1022,20 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     return;
   }
   if (msg.type === "orb-done") {
+    if (msg.epoch !== orbEpoch) return; // stale: geometry changed since requested
     demo.orbComputing = false;
     demo.orbEnergies = msg.energies.slice();
     demo.orbOccupations = msg.occupations.slice();
     demo.orbHomo = msg.homoIndex;
     demo.orbLumo = msg.lumoIndex;
+    demo.orbCharges = msg.charges.slice();
+    demo.orbComposition = msg.composition.map((c) => c.slice());
     demo.orbReady = true;
     demo.orbSelected = null;
-    drawLadder();
-    orbLadderEl.style.display = "block";
-    orbNoteEl.style.display = "block";
+    renderOrbSummary();
+    renderOrbCharges();
+    drawDiagram(); // build the (hidden) expanded diagram so "View" is instant
+    orbSummaryEl.style.display = "block";
     orbDetailEl.style.display = "none";
     molSelect.disabled = false;
     btnLoadSmiles.disabled = false;
@@ -1000,18 +1048,19 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     const gap = Number.isFinite(eH) && Number.isFinite(eL) ? (eL - eH).toFixed(2) : "—";
     const sing = msg.singular ? ` — dropped ${msg.droppedCount} near-singular` : "";
     setOrbStatus(
-      `${msg.nMO} MOs, ${msg.nElectrons} valence e⁻. ` +
-        `HOMO ${Number.isFinite(eH) ? eH.toFixed(2) : "—"} eV, LUMO ${Number.isFinite(eL) ? eL.toFixed(2) : "—"} eV, ` +
-        `gap ${gap} eV${sing}. Click a level.`,
+      `${msg.nMO} MOs, ${msg.nElectrons} valence e⁻${sing}. ` +
+        `View the diagram or click a level.`,
       "good",
     );
     return;
   }
   if (msg.type === "orb-progress") {
+    if (msg.epoch !== orbEpoch) return; // stale grid progress
     setOrbStatus(`evaluating ψ on grid… ${msg.done}/${msg.total} slabs`);
     return;
   }
   if (msg.type === "orb-grid-done") {
+    if (msg.epoch !== orbEpoch) return; // stale: molecule changed mid-grid
     demo.orbComputing = false;
     applyOrbMeshes(msg);
     refreshOrbButton();
@@ -1336,26 +1385,33 @@ function clearOrbMeshes(): void {
   demo.orbMeshVisible = false;
 }
 
-/** Clear all orbital state + meshes (called on any geometry change). */
+/** Clear all orbital state + meshes (called on any geometry change). Bumps the
+ * epoch so any in-flight worker orbital response is recognised as stale. */
 function resetOrbitals(): void {
+  orbEpoch++; // invalidate in-flight worker responses for the old geometry
   clearOrbMeshes();
   compileTracer(); // static-mesh set changed -> re-bake the tracer BVH
+  demo.orbComputing = false; // a geometry change cancels any pending orbital work
   demo.orbReady = false;
   demo.orbEnergies = [];
   demo.orbOccupations = [];
   demo.orbHomo = -1;
   demo.orbLumo = -1;
   demo.orbSelected = null;
-  orbLadderEl.style.display = "none";
-  orbNoteEl.style.display = "none";
+  demo.orbCharges = [];
+  demo.orbComposition = [];
+  closeDiagram();
+  orbSummaryEl.style.display = "none";
   orbDetailEl.style.display = "none";
-  orbLadderEl.innerHTML = "";
+  orbChargesEl.innerHTML = "";
+  orbCompEl.innerHTML = "";
+  orbDiagramEl.innerHTML = "";
 }
 
 /** Kick off an extended-Hückel MO computation in the worker. */
 function computeOrbitals(): void {
   if (!orbAllowed()) return;
-  resetOrbitals();
+  resetOrbitals(); // bumps orbEpoch; the request below carries the fresh value
   demo.orbComputing = true;
   btnOrbitals.disabled = true;
   setOrbStatus("solving extended Hückel MOs…");
@@ -1363,41 +1419,112 @@ function computeOrbitals(): void {
     type: "orbitals",
     symbols,
     positions: Array.from(currentPositions),
+    epoch: orbEpoch,
   });
 }
 
-// --- ladder geometry (viewBox 0 0 300 200) ---
-const LAD_XL = 10;
-const LAD_XR = 268; // leave room on the right for HOMO/LUMO labels
-const LAD_TOP = 14;
-const LAD_BOTTOM = 186;
+/** Format an MO's top AO contributors: "O0 px 100%, H1 s 14%". */
+function formatContribs(list: OrbContribution[] | undefined): string {
+  if (!list || !list.length) return "";
+  return list
+    .map((c) => `${symbols[c.atomIndex] ?? "?"}${c.atomIndex} ${c.aoType} ${Math.round(c.weight * 100)}%`)
+    .join(", ");
+}
 
-/** Draw the clickable MO energy ladder. Occupied solid, virtual dashed;
- * degenerate levels are spread horizontally so each is individually clickable. */
-function drawLadder(): void {
+/** UV/Vis band a photon of wavelength `nm` falls in (chemist's quick intuition). */
+function uvVisBand(nm: number): string {
+  if (nm < 200) return "vacuum UV";
+  if (nm < 400) return "UV";
+  if (nm <= 700) return "visible";
+  return "IR";
+}
+
+/** Fill the compact sidebar summary: HOMO / LUMO / gap (eV) + the equivalent
+ * photon wavelength (1239.84 / gap), the number chemists read as UV-Vis. */
+function renderOrbSummary(): void {
   const E = demo.orbEnergies;
-  if (!E.length) {
-    orbLadderEl.innerHTML = "";
+  const h = demo.orbHomo;
+  const l = demo.orbLumo;
+  const eH = h >= 0 && h < E.length ? E[h]! : NaN;
+  const eL = l >= 0 && l < E.length ? E[l]! : NaN;
+  orbHomoEEl.textContent = Number.isFinite(eH) ? `${eH.toFixed(2)} eV` : "—";
+  orbLumoEEl.textContent = Number.isFinite(eL) ? `${eL.toFixed(2)} eV` : "—";
+  if (Number.isFinite(eH) && Number.isFinite(eL)) {
+    const gap = eL - eH;
+    orbGapEEl.textContent = `${gap.toFixed(2)} eV`;
+    const nm = gap > 1e-6 ? 1239.84 / gap : Infinity;
+    orbGapNmEl.textContent = Number.isFinite(nm)
+      ? `≈ ${nm.toFixed(0)} nm photon (${uvVisBand(nm)})`
+      : "—";
+  } else {
+    orbGapEEl.textContent = "—";
+    orbGapNmEl.textContent = "—";
+  }
+}
+
+/** Fill the per-atom Mulliken charge readout: a full list for small molecules,
+ * a most-negative / most-positive summary for larger ones. */
+function renderOrbCharges(): void {
+  const q = demo.orbCharges;
+  if (!q.length) {
+    orbChargesEl.innerHTML = "";
     return;
   }
-  let emin = Infinity;
-  let emax = -Infinity;
-  for (const e of E) {
-    if (e < emin) emin = e;
-    if (e > emax) emax = e;
+  const fmt = (v: number): string => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}`;
+  const chip = (i: number): string =>
+    `<span class="${q[i]! < 0 ? "neg" : "pos"}">${symbols[i] ?? "?"}${i} ${fmt(q[i]!)}</span>`;
+  if (q.length <= 8) {
+    orbChargesEl.innerHTML =
+      `<span class="ck">Mulliken charge:</span> ` + q.map((_, i) => chip(i)).join(" · ");
+  } else {
+    let mi = 0;
+    let ma = 0;
+    for (let i = 1; i < q.length; i++) {
+      if (q[i]! < q[mi]!) mi = i;
+      if (q[i]! > q[ma]!) ma = i;
+    }
+    orbChargesEl.innerHTML =
+      `<span class="ck">Mulliken charge:</span> most − ${chip(mi)} · most + ${chip(ma)}`;
   }
-  // Clamp the top of the axis so a lone very-high virtual MO cannot compress the
-  // frontier region into invisibility; out-of-range levels pin to the top edge.
-  const eLumo = demo.orbLumo >= 0 && demo.orbLumo < E.length ? E[demo.orbLumo]! : emax;
-  const axisMin = emin - 1;
-  const axisMax = Math.min(emax, eLumo + 16) + 1;
-  const span = axisMax - axisMin || 1;
-  const yFor = (e: number): number => {
-    const c = Math.max(axisMin, Math.min(axisMax, e));
-    return LAD_TOP + ((axisMax - c) / span) * (LAD_BOTTOM - LAD_TOP);
-  };
+}
 
-  // Group indices whose energies are (near) degenerate so they can share a row.
+// --- expanded MO diagram (drawn into the modal SVG; viewBox width fixed, height
+// grows with the level count so a 100-MO system scrolls instead of overlapping) ---
+const DIA_W = 320;
+const DIA_AXIS_X = 52; // vertical energy axis
+const DIA_PLOT_L = 66; // level segments start here
+const DIA_PLOT_R = 296; // ...and end here (room for HOMO/LUMO tags at the right)
+const DIA_TOP = 22; // top margin (px, viewBox units)
+const DIA_BOT = 20; // bottom margin
+const DIA_MIN_GAP = 15; // minimum vertical separation between distinct levels
+const DIA_MIN_H = 240; // minimum diagram height
+const DIA_PX_PER_EV = 9; // energy-linear scale before collision resolution
+/** Fraction (0..1) down the diagram of the HOMO row, so open can scroll to it. */
+let orbFrontierFrac = 0.5;
+
+function niceStep(span: number): number {
+  const target = span / 6;
+  for (const s of [1, 2, 5, 10, 20, 50, 100]) if (s >= target) return s;
+  return 200;
+}
+
+/**
+ * Draw the full clickable MO energy diagram into the modal SVG. A true vertical
+ * energy axis (eV ticks) on the left; each MO is a horizontal segment placed by
+ * energy, with degenerate levels spread side by side at one height. Occupied
+ * levels are solid with electron-pair dots, virtual dashed, HOMO/LUMO tagged.
+ * Where the energy-linear position would overlap a neighbour (dense virtual
+ * manifolds of big molecules) the row is nudged down to keep a finger-friendly
+ * gap and a thin leader connects it back to its true energy on the axis, so
+ * nothing ever collides no matter the system size.
+ */
+function drawDiagram(): void {
+  const E = demo.orbEnergies;
+  if (!E.length) {
+    orbDiagramEl.innerHTML = "";
+    return;
+  }
+  // Group near-degenerate energies (they share a row, drawn side by side).
   const groups: number[][] = [];
   for (let i = 0; i < E.length; i++) {
     const prev = groups[groups.length - 1];
@@ -1405,60 +1532,132 @@ function drawLadder(): void {
     else groups.push([i]);
   }
 
+  let emin = Infinity;
+  let emax = -Infinity;
+  for (const e of E) {
+    if (e < emin) emin = e;
+    if (e > emax) emax = e;
+  }
+  const eSpan = emax - emin || 1;
+  const H = Math.max(
+    DIA_MIN_H,
+    DIA_TOP + DIA_BOT + eSpan * DIA_PX_PER_EV,
+    DIA_TOP + DIA_BOT + (groups.length - 1) * DIA_MIN_GAP,
+  );
+  const plotTop = DIA_TOP;
+  const plotBot = H - DIA_BOT;
+  const trueY = (e: number): number => plotBot - ((e - emin) / eSpan) * (plotBot - plotTop);
+
+  // Collision resolution: walk from the highest-energy group (top) downward,
+  // pushing each subsequent row to keep at least DIA_MIN_GAP of clearance.
+  const gy = new Array<number>(groups.length);
+  let prevY = -Infinity;
+  for (let gi = groups.length - 1; gi >= 0; gi--) {
+    let y = trueY(E[groups[gi]![0]!]!);
+    if (y < prevY + DIA_MIN_GAP) y = prevY + DIA_MIN_GAP;
+    gy[gi] = y;
+    prevY = y;
+  }
+  const overflow = gy[0]! - plotBot; // groups[0] = lowest energy = bottom row
+  if (overflow > 0) for (let gi = 0; gi < gy.length; gi++) gy[gi]! -= overflow;
+
   const parts: string[] = [];
-  // zero-energy reference line, if in range
-  if (axisMin < 0 && axisMax > 0) {
-    const y0 = yFor(0);
-    parts.push(`<line class="zero" x1="${LAD_XL}" y1="${y0.toFixed(1)}" x2="${LAD_XR}" y2="${y0.toFixed(1)}" />`);
-    parts.push(`<text x="${LAD_XR + 2}" y="${(y0 + 3).toFixed(1)}">0</text>`);
+  parts.push(`<line class="axis" x1="${DIA_AXIS_X}" y1="${plotTop}" x2="${DIA_AXIS_X}" y2="${plotBot.toFixed(1)}" />`);
+  parts.push(`<text x="${DIA_AXIS_X - 6}" y="${(plotTop - 9).toFixed(1)}" text-anchor="end">eV</text>`);
+  const step = niceStep(eSpan);
+  for (let t = Math.ceil(emin / step) * step; t <= emax; t += step) {
+    const y = trueY(t);
+    parts.push(`<line class="tick" x1="${DIA_AXIS_X - 4}" y1="${y.toFixed(1)}" x2="${DIA_AXIS_X}" y2="${y.toFixed(1)}" />`);
+    parts.push(`<text x="${DIA_AXIS_X - 6}" y="${(y + 3).toFixed(1)}" text-anchor="end">${t.toFixed(0)}</text>`);
+  }
+  if (emin < 0 && emax > 0) {
+    const y0 = trueY(0);
+    parts.push(`<line class="zero" x1="${DIA_PLOT_L}" y1="${y0.toFixed(1)}" x2="${DIA_PLOT_R}" y2="${y0.toFixed(1)}" />`);
   }
 
-  for (const group of groups) {
+  for (let gi = 0; gi < groups.length; gi++) {
+    const group = groups[gi]!;
+    const y = gy[gi]!;
+    const eTrue = trueY(E[group[0]!]!);
+    if (Math.abs(y - eTrue) > 1.5) {
+      parts.push(`<line class="lead" x1="${DIA_AXIS_X}" y1="${eTrue.toFixed(1)}" x2="${DIA_PLOT_L}" y2="${y.toFixed(1)}" />`);
+    }
     const g = group.length;
-    const cellW = (LAD_XR - LAD_XL) / g;
+    const cellW = (DIA_PLOT_R - DIA_PLOT_L) / g;
     for (let k = 0; k < g; k++) {
       const i = group[k]!;
-      const e = E[i]!;
-      const y = yFor(e);
-      const x0 = LAD_XL + k * cellW + 3;
-      const x1 = LAD_XL + (k + 1) * cellW - 3;
       const occ = demo.orbOccupations[i] ?? 0;
+      const x0 = DIA_PLOT_L + k * cellW + 4;
+      const x1 = DIA_PLOT_L + (k + 1) * cellW - 4;
       let cls = "lvl";
       if (occ <= 0) cls += " virt";
       if (i === demo.orbHomo) cls += " homo";
       else if (i === demo.orbLumo) cls += " lumo";
       if (i === demo.orbSelected) cls += " sel";
       parts.push(`<line class="${cls}" x1="${x0.toFixed(1)}" y1="${y.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${y.toFixed(1)}" />`);
-      // electron dots for occupied levels
       if (occ > 0) {
         const cx = (x0 + x1) / 2;
         const dxs = occ >= 2 ? [-4, 4] : [0];
-        for (const dxo of dxs) {
-          parts.push(`<circle class="edot" cx="${(cx + dxo).toFixed(1)}" cy="${(y - 3).toFixed(1)}" r="1.4" />`);
-        }
+        for (const d of dxs) parts.push(`<circle class="edot" cx="${(cx + d).toFixed(1)}" cy="${(y - 4).toFixed(1)}" r="1.6" />`);
       }
-      // wide transparent hit target (full row height slice for this cell)
+      // Finger-friendly hit target: a full DIA_MIN_GAP-tall slice of the cell.
       parts.push(
-        `<rect class="hit" data-orb="${i}" x="${(LAD_XL + k * cellW).toFixed(1)}" y="${(y - 5).toFixed(1)}" width="${cellW.toFixed(1)}" height="10" />`,
+        `<rect class="hit" data-orb="${i}" x="${(DIA_PLOT_L + k * cellW).toFixed(1)}" y="${(y - DIA_MIN_GAP / 2).toFixed(1)}" width="${cellW.toFixed(1)}" height="${DIA_MIN_GAP}" />`,
       );
     }
+    if (group.includes(demo.orbHomo)) parts.push(`<text class="tag" x="${DIA_PLOT_R + 4}" y="${(y + 3).toFixed(1)}">HOMO</text>`);
+    else if (group.includes(demo.orbLumo)) parts.push(`<text class="tag" x="${DIA_PLOT_R + 4}" y="${(y + 3).toFixed(1)}">LUMO</text>`);
   }
 
-  // HOMO / LUMO labels at the right edge.
-  if (demo.orbHomo >= 0) {
-    parts.push(`<text class="lbl" x="${LAD_XR + 2}" y="${(yFor(E[demo.orbHomo]!) + 3).toFixed(1)}">HOMO</text>`);
-  }
-  if (demo.orbLumo >= 0 && demo.orbLumo < E.length) {
-    parts.push(`<text class="lbl" x="${LAD_XR + 2}" y="${(yFor(E[demo.orbLumo]!) + 3).toFixed(1)}">LUMO</text>`);
-  }
-  // axis extent labels
-  parts.push(`<text x="${LAD_XL}" y="${LAD_TOP - 4}">${axisMax.toFixed(0)} eV</text>`);
-  parts.push(`<text x="${LAD_XL}" y="${(LAD_BOTTOM + 10).toFixed(1)}">${axisMin.toFixed(0)} eV</text>`);
-
-  orbLadderEl.innerHTML = parts.join("");
+  const homoGroup = groups.findIndex((grp) => grp.includes(demo.orbHomo));
+  orbFrontierFrac = homoGroup >= 0 ? gy[homoGroup]! / H : 0.5;
+  orbDiagramEl.setAttribute("viewBox", `0 0 ${DIA_W} ${H.toFixed(0)}`);
+  orbDiagramEl.innerHTML = parts.join("");
 }
 
-/** Select an MO: label it and request its isosurface grid from the worker. */
+/** Open the expanded diagram modal and scroll the frontier into view. */
+function openDiagram(): void {
+  if (!demo.orbReady) return;
+  drawDiagram();
+  orbOverlay.classList.add("show");
+  requestAnimationFrame(() => {
+    const target = orbFrontierFrac * orbDiagramWrap.scrollHeight - orbDiagramWrap.clientHeight * 0.5;
+    orbDiagramWrap.scrollTop = Math.max(0, target);
+  });
+}
+
+/** Close the expanded diagram modal. */
+function closeDiagram(): void {
+  orbOverlay.classList.remove("show");
+  hideTip();
+}
+
+/** Show the hover tooltip (label, energy, occupancy, dominant composition). */
+function showTip(i: number, clientX: number, clientY: number): void {
+  const E = demo.orbEnergies;
+  if (i < 0 || i >= E.length) return;
+  const occ = demo.orbOccupations[i] ?? 0;
+  const comp = formatContribs(demo.orbComposition[i]);
+  orbTipEl.innerHTML =
+    `<b>${orbLabel(i)}</b> · MO ${i + 1}<br>${E[i]!.toFixed(2)} eV · ${occ > 0 ? `occ ${occ}` : "virtual"}` +
+    (comp ? `<br>${comp}` : "");
+  const wrapRect = orbDiagramWrap.getBoundingClientRect();
+  const x = clientX - wrapRect.left + 12;
+  const y = clientY - wrapRect.top + orbDiagramWrap.scrollTop + 12;
+  orbTipEl.style.left = `${x}px`;
+  orbTipEl.style.top = `${y}px`;
+  orbTipEl.classList.add("show");
+  const tipW = orbTipEl.offsetWidth;
+  if (x + tipW > orbDiagramWrap.clientWidth) {
+    orbTipEl.style.left = `${Math.max(4, orbDiagramWrap.clientWidth - tipW - 6)}px`;
+  }
+}
+
+function hideTip(): void {
+  orbTipEl.classList.remove("show");
+}
+
+/** Select an MO: label it, show its composition, and request its isosurface. */
 function selectOrbital(i: number): void {
   if (!demo.orbReady || i < 0 || i >= demo.orbEnergies.length) return;
   if (demo.orbComputing) return; // don't overlap grid requests
@@ -1467,7 +1666,10 @@ function selectOrbital(i: number): void {
   const e = demo.orbEnergies[i]!;
   const occ = demo.orbOccupations[i] ?? 0;
   orbSelEl.textContent = `${orbLabel(i)} · ${e.toFixed(2)} eV · ${occ > 0 ? `occ ${occ}` : "virtual"}`;
-  drawLadder(); // highlight the selected level
+  const comp = formatContribs(demo.orbComposition[i]);
+  orbCompEl.textContent = comp ? `composition: ${comp}` : "";
+  drawDiagram(); // reflect the selection highlight in the (built) diagram
+  closeDiagram(); // reveal the freshly-rendered isosurface behind the modal
   requestOrbitalGrid(i);
 }
 
@@ -1476,7 +1678,7 @@ function requestOrbitalGrid(i: number): void {
   demo.orbComputing = true;
   btnOrbitals.disabled = true;
   setOrbStatus(`evaluating ψ for ${orbLabel(i)}…`);
-  worker.postMessage({ type: "orbital-grid", orbitalIndex: i, isovalue: demo.orbIsovalue });
+  worker.postMessage({ type: "orbital-grid", orbitalIndex: i, isovalue: demo.orbIsovalue, epoch: orbEpoch });
 }
 
 /** Build a THREE.BufferGeometry from a worker isosurface payload. */
@@ -1513,14 +1715,15 @@ function applyOrbMeshes(msg: OrbGridDoneMsg): void {
   compileTracer(); // orbital meshes are static -> baked into the static BVH here
 }
 
-/** Hide the isosurface but keep the computed ladder. */
+/** Hide the isosurface but keep the computed diagram/summary. */
 function hideOrbitals(): void {
   clearOrbMeshes();
   compileTracer();
   demo.orbSelected = null;
   orbDetailEl.style.display = "none";
-  if (demo.orbReady) drawLadder();
-  setOrbStatus("isosurface hidden. Click a level to show another.");
+  orbCompEl.textContent = "";
+  if (demo.orbReady) drawDiagram();
+  setOrbStatus("isosurface hidden. View the diagram or click a level to show another.");
 }
 
 // ---------------------------------------------------------------------------
@@ -1656,30 +1859,45 @@ function clearSketch(): void {
 };
 
 // Headless-verification handle for the orbitals flow: drive compute/select/hide
-// without a mouse and inspect the resulting lobe meshes' triangle counts.
+// and open/close the diagram without a mouse, and inspect meshes, charges, and
+// composition.
 (window as unknown as {
   __orb: {
     compute: () => void;
     select: (i: number) => void;
     hide: () => void;
+    openDiagram: () => void;
+    closeDiagram: () => void;
+    diagramOpen: () => boolean;
+    diagramLevels: () => number;
     ready: () => boolean;
     computing: () => boolean;
     energies: () => number[];
     homo: () => number;
     lumo: () => number;
     selected: () => number | null;
+    charges: () => number[];
+    composition: (i: number) => OrbContribution[];
+    lobeColors: () => { pos: number; neg: number };
     meshInfo: () => { pos: number; neg: number; posVisible: boolean; negVisible: boolean };
   };
 }).__orb = {
   compute: computeOrbitals,
   select: selectOrbital,
   hide: hideOrbitals,
+  openDiagram,
+  closeDiagram,
+  diagramOpen: () => orbOverlay.classList.contains("show"),
+  diagramLevels: () => orbDiagramEl.querySelectorAll("rect.hit").length,
   ready: () => demo.orbReady,
   computing: () => demo.orbComputing,
   energies: () => demo.orbEnergies.slice(),
   homo: () => demo.orbHomo,
   lumo: () => demo.orbLumo,
   selected: () => demo.orbSelected,
+  charges: () => demo.orbCharges.slice(),
+  composition: (i: number) => (demo.orbComposition[i] ?? []).slice(),
+  lobeColors: () => ({ pos: orbPosMat.color.getHex(), neg: orbNegMat.color.getHex() }),
   meshInfo: () => ({
     pos: orbPosMesh ? (orbPosMesh.geometry.index?.count ?? 0) / 3 : 0,
     neg: orbNegMesh ? (orbNegMesh.geometry.index?.count ?? 0) / 3 : 0,
@@ -1735,6 +1953,8 @@ spectrumEl.addEventListener("click", (e) => {
 // extended Hückel orbitals
 btnOrbitals.addEventListener("click", () => computeOrbitals());
 btnOrbClear.addEventListener("click", () => hideOrbitals());
+btnOrbView.addEventListener("click", () => openDiagram());
+btnOrbClose.addEventListener("click", () => closeDiagram());
 orbIsoEl.addEventListener("input", () => {
   demo.orbIsovalue = Number(orbIsoEl.value);
   orbIsoValEl.textContent = demo.orbIsovalue.toFixed(3);
@@ -1743,11 +1963,28 @@ orbIsoEl.addEventListener("input", () => {
 orbIsoEl.addEventListener("change", () => {
   if (demo.orbSelected !== null && !demo.orbComputing) requestOrbitalGrid(demo.orbSelected);
 });
-// click a ladder level's hit target to show its isosurface
-orbLadderEl.addEventListener("click", (e) => {
-  const target = e.target as Element | null;
-  const attr = target?.getAttribute?.("data-orb");
+// click a diagram level's hit target to render its isosurface
+orbDiagramEl.addEventListener("click", (e) => {
+  const attr = (e.target as Element | null)?.getAttribute?.("data-orb");
   if (attr !== null && attr !== undefined) selectOrbital(Number(attr));
+});
+// hover a level for its composition tooltip
+orbDiagramEl.addEventListener("pointermove", (e) => {
+  const attr = (e.target as Element | null)?.getAttribute?.("data-orb");
+  if (attr !== null && attr !== undefined) showTip(Number(attr), e.clientX, e.clientY);
+  else hideTip();
+});
+orbDiagramEl.addEventListener("pointerleave", hideTip);
+// click the dim backdrop (outside the modal) to dismiss the diagram
+orbOverlay.addEventListener("click", (e) => {
+  if (e.target === orbOverlay) closeDiagram();
+});
+// Escape closes whichever modal is open
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (orbOverlay.classList.contains("show")) closeDiagram();
+    else if (sketchOverlay.classList.contains("show")) closeSketch();
+  }
 });
 
 // structure sketcher (JSME modal)
@@ -1778,7 +2015,9 @@ function wireMeasurePicking(): void {
     dragged = false;
   });
   canvas.addEventListener("pointermove", (e) => {
-    if (Math.hypot(e.clientX - downX, e.clientY - downY) > 4) dragged = true;
+    // ~9 px so a finger tap (which jitters past 4 px) still registers as a click,
+    // not an orbit drag; a real drag easily clears this on mouse or touch.
+    if (Math.hypot(e.clientX - downX, e.clientY - downY) > 9) dragged = true;
   });
   canvas.addEventListener("pointerup", (e) => {
     if (dragged) return; // it was an orbit drag, not a pick

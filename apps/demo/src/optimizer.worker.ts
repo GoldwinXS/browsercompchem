@@ -30,6 +30,8 @@ import {
   autoGridSpec,
   marchingCubes,
   gradientNormals,
+  mullikenCharges,
+  orbitalComposition,
   type EnergyForceProvider,
   type EnergyForces,
   type Molecule,
@@ -161,11 +163,12 @@ self.onmessage = async (ev: MessageEvent) => {
         };
       }
     | { type: "vibrations"; symbols: string[]; positions: number[] }
-    | { type: "orbitals"; symbols: string[]; positions: number[] }
+    | { type: "orbitals"; symbols: string[]; positions: number[]; epoch: number }
     | {
         type: "orbital-grid";
         orbitalIndex: number;
         isovalue: number;
+        epoch: number;
       };
 
   try {
@@ -399,8 +402,24 @@ self.onmessage = async (ev: MessageEvent) => {
       const res = await extendedHuckel(mol);
       lastOrbitals = res;
       lastOrbPositions = data.positions.slice();
+
+      // Mulliken partial charges (per atom) and, per MO, its dominant AO
+      // contributors -- both cheap from the coefficients + overlap we already
+      // have, and worth precomputing once so the UI (charge readout, per-orbital
+      // composition, diagram tooltips) needs no extra round-trips.
+      const { atomCharges } = mullikenCharges(res, data.symbols);
+      const composition: { atomIndex: number; aoType: string; weight: number }[][] = [];
+      for (let mo = 0; mo < res.nMO; mo++) {
+        const contribs = orbitalComposition(res, mo)
+          .filter((c) => Math.abs(c.weight) >= 0.03) // drop <3% noise
+          .slice(0, 4)
+          .map((c) => ({ atomIndex: c.atomIndex, aoType: c.aoType, weight: c.weight }));
+        composition.push(contribs);
+      }
+
       (self as unknown as Worker).postMessage({
         type: "orb-done",
+        epoch: data.epoch,
         energies: Array.from(res.orbitalEnergies),
         occupations: Array.from(res.occupations),
         homoIndex: res.homoIndex,
@@ -410,6 +429,8 @@ self.onmessage = async (ev: MessageEvent) => {
         nElectrons: res.nElectrons,
         singular: res.singular,
         droppedCount: res.droppedCount,
+        charges: Array.from(atomCharges),
+        composition,
         elapsedMs: performance.now() - t0,
       });
       return;
@@ -426,7 +447,7 @@ self.onmessage = async (ev: MessageEvent) => {
         maxDim: 72,
       });
       const field = evaluateOrbitalOnGrid(lastOrbitals, data.orbitalIndex, spec, (done, total) => {
-        (self as unknown as Worker).postMessage({ type: "orb-progress", done, total });
+        (self as unknown as Worker).postMessage({ type: "orb-progress", epoch: data.epoch, done, total });
       });
       const sp: [number, number, number] =
         typeof spec.spacing === "number" ? [spec.spacing, spec.spacing, spec.spacing] : spec.spacing;
@@ -450,6 +471,7 @@ self.onmessage = async (ev: MessageEvent) => {
       (self as unknown as Worker).postMessage(
         {
           type: "orb-grid-done",
+          epoch: data.epoch,
           orbitalIndex: data.orbitalIndex,
           isovalue: iso,
           maxAbsPsi,

@@ -121,26 +121,82 @@
       #spectrum text { fill: var(--muted); font-size: 8px; font-family: var(--mono); }
       #vib-freq { color: var(--fg); font-variant-numeric: tabular-nums; }
 
-      /* --- orbital energy ladder --- */
+      /* --- orbitals: compact sidebar summary --- */
       #orb-status { color: var(--muted); font-size: 11px; margin-top: 8px; min-height: 1.4em; line-height: 1.4; }
       #orb-status.good { color: var(--good); }
       #orb-status.warn { color: var(--warn); }
-      #orb-ladder {
-        width: 100%; height: 200px; display: block; margin-top: 8px;
+      #orb-summary { margin-top: 10px; }
+      .orb-frontier { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+      .orb-frontier .of-cell {
         background: #0b0e15; border: 1px solid var(--panel-border); border-radius: 6px;
+        padding: 5px 7px; display: flex; flex-direction: column; gap: 1px; min-width: 0;
       }
-      #orb-ladder .lvl { stroke: var(--accent); stroke-width: 2; }
-      #orb-ladder .lvl.virt { stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 3 2; }
-      #orb-ladder .lvl.homo { stroke: var(--good); stroke-width: 2.6; }
-      #orb-ladder .lvl.lumo { stroke: var(--warn); stroke-width: 2.6; }
-      #orb-ladder .lvl.sel { stroke-width: 3.6; }
-      #orb-ladder .edot { fill: var(--accent); }
-      #orb-ladder .zero { stroke: var(--panel-border); stroke-width: 1; stroke-dasharray: 2 3; }
-      #orb-ladder .hit { fill: transparent; cursor: pointer; }
-      #orb-ladder text { fill: var(--muted); font-size: 8px; font-family: var(--mono); }
-      #orb-ladder text.lbl { fill: var(--fg); font-size: 8px; }
+      .orb-frontier .of-k { color: var(--muted); font-size: 9px; letter-spacing: 0.04em; text-transform: uppercase; }
+      .orb-frontier .of-v { color: var(--fg); font-size: 12px; font-variant-numeric: tabular-nums; }
+      #orb-gap-nm { margin-top: 6px; }
+      /* phase legend chips (plain CSS swatches, no glyph fonts) */
+      .orb-legend { display: flex; gap: 14px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+      .orb-legend .chip { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+      .orb-legend .sw { width: 13px; height: 13px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.18); }
+      .orb-legend .sw-pos { background: #3b7cff; }
+      .orb-legend .sw-neg { background: #ff5a2c; }
+      #orb-view { margin-top: 2px; width: 100%; }
+      .orb-charges { color: var(--muted); font-size: 11px; margin-top: 8px; line-height: 1.55; word-break: break-word; }
+      .orb-charges .ck { color: var(--muted); }
+      .orb-charges .neg { color: #7fb2ff; }
+      .orb-charges .pos { color: #ff9a6b; }
       #orb-sel { color: var(--fg); font-variant-numeric: tabular-nums; }
+      #orb-comp { margin-top: 6px; color: var(--muted); font-size: 11px; line-height: 1.4; word-break: break-word; }
       #orb-iso-val { color: var(--fg); font-variant-numeric: tabular-nums; min-width: 3.4em; text-align: right; }
+
+      /* --- expanded MO diagram (reuses the sketch-modal visual language) --- */
+      #orb-overlay {
+        position: fixed; inset: 0; z-index: 50; display: none;
+        align-items: center; justify-content: center;
+        background: rgba(4, 6, 12, 0.66); backdrop-filter: blur(3px);
+      }
+      #orb-overlay.show { display: flex; }
+      #orb-modal {
+        box-sizing: border-box;
+        background: var(--panel); border: 1px solid var(--panel-border);
+        border-radius: 12px; padding: 16px; width: min(520px, 92vw);
+        max-height: 90vh; display: flex; flex-direction: column;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      }
+      #orb-modal h2 {
+        font-size: 12px; font-weight: 600; margin: 0 0 4px;
+        letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted);
+      }
+      #orb-modal .hint { color: var(--muted); font-size: 11px; margin: 0 0 10px; line-height: 1.4; }
+      #orb-diagram-wrap {
+        position: relative; overflow-y: auto; overscroll-behavior: contain;
+        max-height: 62vh; background: #0b0e15;
+        border: 1px solid var(--panel-border); border-radius: 8px;
+      }
+      #orb-diagram { display: block; width: 100%; }
+      #orb-diagram .lvl { stroke: var(--accent); stroke-width: 2.4; }
+      #orb-diagram .lvl.virt { stroke: var(--muted); stroke-width: 1.6; stroke-dasharray: 4 3; }
+      #orb-diagram .lvl.homo { stroke: var(--good); stroke-width: 3; }
+      #orb-diagram .lvl.lumo { stroke: var(--warn); stroke-width: 3; }
+      #orb-diagram .lvl.sel { stroke: #ffffff; stroke-width: 4.2; }
+      #orb-diagram .edot { fill: var(--fg); }
+      #orb-diagram .lead { stroke: var(--panel-border); stroke-width: 1; }
+      #orb-diagram .axis { stroke: var(--panel-border); stroke-width: 1.2; }
+      #orb-diagram .tick { stroke: var(--panel-border); stroke-width: 1; }
+      #orb-diagram .zero { stroke: #3a4a66; stroke-width: 1; stroke-dasharray: 2 3; }
+      #orb-diagram .hit { fill: transparent; cursor: pointer; }
+      #orb-diagram text { fill: var(--muted); font-size: 8px; font-family: var(--mono); }
+      #orb-diagram text.tag { fill: var(--fg); font-size: 8px; font-weight: 600; }
+      #orb-tip {
+        position: absolute; pointer-events: none; z-index: 2; display: none;
+        max-width: 230px; background: rgba(12,16,26,0.97); border: 1px solid var(--panel-border);
+        border-radius: 6px; padding: 6px 9px; font-size: 10px; line-height: 1.5; color: var(--fg);
+        box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+      }
+      #orb-tip.show { display: block; }
+      #orb-modal-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
+      #orb-modal-actions .orb-legend { margin: 0; }
+      #orb-close { padding: 7px 16px; }
 
       /* --- structure sketcher (JSME) modal --- */
       #sketch-overlay {
@@ -169,6 +225,21 @@
       #sketch-status.warn { color: var(--warn); }
       #sketch-actions { display: flex; gap: 8px; }
       #sketch-actions button { flex: 1; }
+
+      /* --- narrow screens (phones): dock the control panel to the bottom so the
+         3D view stays visible above it, and give touch targets more room. A full
+         mobile layout is a later pass; this is the cheap high-value piece. --- */
+      @media (max-width: 640px) {
+        #ui {
+          top: auto; bottom: 0; left: 0; right: 0; width: auto;
+          max-height: 48vh; border-radius: 12px 12px 0 0;
+          border-left: 0; border-right: 0; border-bottom: 0;
+          padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+        }
+        button.mini { padding: 6px 11px; }
+        #orb-modal { padding: 14px; }
+        #orb-diagram { font-size: 9px; }
+      }
     </style>
   </head>
   <body>
@@ -250,17 +321,34 @@
           <button id="orbitals">Compute orbitals</button>
         </div>
         <div id="orb-status">extended Hückel MOs for H, C, N, O, F, S, Cl</div>
-        <svg id="orb-ladder" viewBox="0 0 300 200" preserveAspectRatio="none" style="display:none"></svg>
-        <div id="orb-note" class="plot-label" style="display:none">
-          one-shot extended Hückel MO energies (eV). Occupied levels are solid,
-          virtual levels dashed; HOMO and LUMO are labeled. Click a level to draw
-          its wavefunction isosurface over the molecule (blue +lobe, gold −lobe).
+
+        <div id="orb-summary" style="display:none">
+          <div class="orb-frontier">
+            <div class="of-cell"><span class="of-k">HOMO</span><span class="of-v" id="orb-homo-e">—</span></div>
+            <div class="of-cell"><span class="of-k">LUMO</span><span class="of-v" id="orb-lumo-e">—</span></div>
+            <div class="of-cell"><span class="of-k">gap</span><span class="of-v" id="orb-gap-e">—</span></div>
+          </div>
+          <div id="orb-gap-nm" class="plot-label">—</div>
+          <div class="orb-legend">
+            <span class="chip"><span class="sw sw-pos"></span>+ phase</span>
+            <span class="chip"><span class="sw sw-neg"></span>− phase</span>
+          </div>
+          <button id="orb-view" class="mini">View MO diagram</button>
+          <div id="orb-charges" class="orb-charges"></div>
+          <div id="orb-scale-note" class="plot-label">
+            extended Hückel energies are qualitative — trust the orderings,
+            spacings, and degeneracies, not the absolute eV (EHT overbinds
+            relative to photoelectron ionization energies by several eV). The
+            HOMO–LUMO gap is a difference, so it is more robust than either level.
+          </div>
         </div>
+
         <div id="orb-detail" style="display:none">
-          <div class="sub" style="margin-top:8px">
+          <div class="sub" style="margin-top:10px">
             <span id="orb-sel">—</span>
             <button id="orb-clear" class="mini">Hide</button>
           </div>
+          <div id="orb-comp"></div>
           <div class="sub" style="margin-top:8px">
             <label class="chk" for="orb-iso">isovalue</label>
             <input type="range" id="orb-iso" min="0.01" max="0.2" step="0.005" value="0.05" style="flex:1; accent-color: var(--accent); cursor: pointer;" />
@@ -281,6 +369,32 @@
           <button id="sketch-seed" class="mini">Seed current</button>
           <button id="sketch-clear" class="mini">Clear</button>
           <button id="sketch-cancel" class="mini">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="orb-overlay">
+      <div id="orb-modal">
+        <h2>Molecular orbital diagram</h2>
+        <p class="hint">
+          Extended Hückel MO energies (eV). Occupied levels are solid with
+          electron-pair dots; virtual levels dashed. Degenerate levels sit
+          side by side. Hover a level for its composition; click to render its
+          wavefunction isosurface (the diagram closes so you can see it).
+          These energies are qualitative — trust orderings, spacings, and
+          degeneracies, not absolute eV (EHT overbinds vs photoelectron
+          ionization energies by several eV).
+        </p>
+        <div id="orb-diagram-wrap">
+          <svg id="orb-diagram" preserveAspectRatio="xMidYMin meet"></svg>
+          <div id="orb-tip"></div>
+        </div>
+        <div id="orb-modal-actions">
+          <span class="orb-legend">
+            <span class="chip"><span class="sw sw-pos"></span>+ phase</span>
+            <span class="chip"><span class="sw sw-neg"></span>− phase</span>
+          </span>
+          <button id="orb-close" class="mini">Close</button>
         </div>
       </div>
     </div>
