@@ -24,10 +24,14 @@
 import {
   Ani2xProvider,
   FireOptimizer,
+  computeNormalModes,
   type EnergyForceProvider,
   type EnergyForces,
   type Molecule,
 } from "@browser-comp-chem/engine";
+
+/** Above this max force we treat a geometry as NOT a stationary point and relax it first. */
+const STATIONARY_THRESHOLD = 1e-3;
 
 let provider: Ani2xProvider | undefined;
 
@@ -80,7 +84,8 @@ self.onmessage = async (ev: MessageEvent) => {
           maxSteps: number;
           dtMax: number;
         };
-      };
+      }
+    | { type: "vibrations"; symbols: string[]; positions: number[] };
 
   try {
     if (data.type === "init") {
@@ -129,6 +134,75 @@ self.onmessage = async (ev: MessageEvent) => {
           positions: finalPos,
         },
         [finalPos.buffer],
+      );
+      return;
+    }
+
+    if (data.type === "vibrations") {
+      if (!provider) throw new Error("optimizer worker: model not initialized");
+      let mol: Molecule = {
+        symbols: data.symbols,
+        positions: Float64Array.from(data.positions),
+        charge: 0,
+        multiplicity: 1,
+      };
+
+      const t0 = performance.now();
+
+      // Verify we're at (or near) a stationary point; the Hessian is only
+      // meaningful there. If the forces are too large, relax first with FIRE.
+      let maxForce = maxAbs((await provider.energyForces(mol)).forces);
+      let relaxed = false;
+      if (maxForce >= STATIONARY_THRESHOLD) {
+        const fire = new FireOptimizer({
+          forceTolerance: 1e-4,
+          maxSteps: 2000,
+          dtMax: 0.2,
+          maxStep: 0.1,
+        });
+        const r = await fire.optimize(mol, provider);
+        mol = r.molecule;
+        maxForce = r.maxForce;
+        relaxed = true;
+      }
+
+      // 6N analytic-force evaluations; stream Hessian-column progress so the UI
+      // can show a bar. Never blocks the main thread (this is the worker).
+      const n3 = mol.positions.length;
+      const nm = await computeNormalModes(mol, provider, {
+        onProgress: (done, total) => {
+          (self as unknown as Worker).postMessage({
+            type: "vib-progress",
+            done,
+            total,
+          });
+        },
+      });
+
+      // Pack the per-mode Cartesian displacement vectors into one flat buffer
+      // (nModes * n3) for a single transferable, plus the equilibrium geometry
+      // the animation oscillates around (adopts any further relaxation).
+      const nModes = nm.modes.length;
+      const flatModes = new Float64Array(nModes * n3);
+      for (let m = 0; m < nModes; m++) flatModes.set(nm.modes[m]!, m * n3);
+      const eqPos = new Float32Array(n3);
+      for (let i = 0; i < n3; i++) eqPos[i] = mol.positions[i]!;
+
+      (self as unknown as Worker).postMessage(
+        {
+          type: "vib-done",
+          frequencies: nm.frequencies,
+          modes: flatModes,
+          nModes,
+          n3,
+          isLinear: nm.isLinear,
+          maxResidualTransRot: nm.maxResidualTransRot,
+          maxForce,
+          relaxed,
+          equilibrium: eqPos,
+          elapsedMs: performance.now() - t0,
+        },
+        [flatModes.buffer, eqPos.buffer],
       );
       return;
     }

@@ -1,7 +1,11 @@
 /**
  * Pure-TypeScript classical (cyclic) Jacobi eigensolver for real symmetric
  * matrices. Robust and dependency-free -- fine for the small 3N x 3N Hessians
- * (N <= ~12 here). Returns eigenvalues ascending with matching eigenvectors.
+ * (N <= ~20 here). Returns eigenvalues ascending with matching eigenvectors.
+ *
+ * This is the single, shared implementation used by the engine's vibrational
+ * analysis AND (via re-import) by the accuracy bench, which used to carry its
+ * own copy in packages/bench/src/accuracy/linalg.ts.
  */
 export interface Eigen {
   values: number[]; // ascending

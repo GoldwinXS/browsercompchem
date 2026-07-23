@@ -56,6 +56,16 @@ interface DemoState {
   rdkitVersion: string | null;
   positions: number[]; // live flat geometry snapshot (headless verification)
   symbols: string[]; // element symbols of the current molecule
+  // --- vibrational normal-mode analysis ---
+  vibComputing: boolean; // Hessian/normal-mode analysis running in the worker
+  vibReady: boolean; // modes available for the current geometry
+  vibFrequencies: number[]; // harmonic wavenumbers (cm^-1); imaginary -> negative
+  vibIsLinear: boolean; // molecule treated as linear (3N-5 modes)
+  vibImaginaryCount: number; // # of negative (imaginary) modes -> non-stationary flag
+  vibSelectedMode: number | null; // index into vibFrequencies currently animating
+  vibAnimating: boolean; // atoms currently oscillating along a mode
+  vibAmplitude: number; // visual displacement amplitude (Angstrom)
+  vibMaxForce: number | null; // max force at the geometry the Hessian was built on
 }
 const demo: DemoState = {
   webgl: false,
@@ -85,6 +95,15 @@ const demo: DemoState = {
   rdkitVersion: null,
   positions: [],
   symbols: [],
+  vibComputing: false,
+  vibReady: false,
+  vibFrequencies: [],
+  vibIsLinear: false,
+  vibImaginaryCount: 0,
+  vibSelectedMode: null,
+  vibAnimating: false,
+  vibAmplitude: 0.3,
+  vibMaxForce: null,
 };
 (window as unknown as { __demo: DemoState }).__demo = demo;
 
@@ -136,6 +155,14 @@ const btnSketchSeed = $<HTMLButtonElement>("sketch-seed");
 const btnSketchClear = $<HTMLButtonElement>("sketch-clear");
 const btnSketchCancel = $<HTMLButtonElement>("sketch-cancel");
 const sketchStatus = $("sketch-status");
+const btnVibrations = $<HTMLButtonElement>("vibrations");
+const vibStatusEl = $("vib-status");
+const spectrumEl = $("spectrum"); // SVG
+const vibNoteEl = $("vib-note");
+const vibModeEl = $("vib-mode");
+const vibFreqEl = $("vib-freq");
+const btnVibStop = $<HTMLButtonElement>("vib-stop");
+const vibAmpEl = $<HTMLInputElement>("vib-amp");
 
 for (const key of MOLECULE_ORDER) {
   const opt = document.createElement("option");
@@ -319,6 +346,17 @@ let lastCustomSmiles: string | null = null;
 let basePositions = new Float64Array(0); // reference geometry (Perturb origin)
 let currentPositions: Float32Array<ArrayBufferLike> = new Float32Array(0); // live geometry
 
+// --- vibrational normal-mode state (separate view mode; never touches the
+// optimize flow). Modes are stored flat (nModes * n3) with their frequencies. ---
+let vibEquilibrium: Float64Array<ArrayBufferLike> = new Float64Array(0); // geometry the Hessian was built on
+let vibModes: Float64Array<ArrayBufferLike> = new Float64Array(0); // flat (nModes * n3) normalized displacements
+let vibNModes = 0;
+let vibN3 = 0;
+let vibClock = 0; // seconds, advanced by the render loop while animating
+let vibLastT = 0; // performance.now() of the previous animation frame
+const VIB_DISPLAY_HZ = 1.1; // visual oscillation rate (decoupled from the real cm^-1)
+const vibScratch = { buf: new Float32Array(0) }; // reused per-frame position buffer
+
 /**
  * Install a geometry (symbols + flat Angstrom positions) into the scene and
  * frame the camera. Shared by the built-in dropdown and the SMILES loader.
@@ -352,6 +390,8 @@ function setGeometry(newSymbols: string[], positions: ArrayLike<number>): void {
     if (rt) rt.compileScene(scene);
   }
   resetReadout();
+  resetVibrations();
+  refreshVibButton();
 }
 
 /** Load one of the baked built-in molecules (all within the ANI-2x element set). */
@@ -455,6 +495,8 @@ function perturb(): void {
   currentPositions = p;
   if (view) view.update(currentPositions);
   resetReadout();
+  resetVibrations();
+  refreshVibButton();
   setStatus("perturbed — press Optimize to relax", "warn");
 }
 
@@ -565,14 +607,31 @@ type StepMsg = { type: "step"; step: number; energy: number; maxForce: number; p
 type DoneMsg = { type: "done"; converged: boolean; energy: number; maxForce: number; steps: number; elapsedMs: number; positions: Float32Array };
 type ReadyMsg = { type: "ready"; variant: string; members: number };
 type ErrMsg = { type: "error"; message: string };
+type VibProgressMsg = { type: "vib-progress"; done: number; total: number };
+type VibDoneMsg = {
+  type: "vib-done";
+  frequencies: number[];
+  modes: Float64Array; // flat (nModes * n3)
+  nModes: number;
+  n3: number;
+  isLinear: boolean;
+  maxResidualTransRot: number;
+  maxForce: number;
+  relaxed: boolean;
+  equilibrium: Float32Array;
+  elapsedMs: number;
+};
 
-worker.onmessage = (ev: MessageEvent<StepMsg | DoneMsg | ReadyMsg | ErrMsg>) => {
+type WorkerMsg = StepMsg | DoneMsg | ReadyMsg | ErrMsg | VibProgressMsg | VibDoneMsg;
+
+worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
   const msg = ev.data;
   if (msg.type === "ready") {
     demo.ready = true;
     btnOptimize.disabled = !demo.coverageOK;
     btnPerturb.disabled = !demo.coverageOK;
     btnLoadSmiles.disabled = false;
+    refreshVibButton();
     setStatus(`model ready — ${msg.variant}, ${msg.members} members`, "good");
     return;
   }
@@ -618,6 +677,7 @@ worker.onmessage = (ev: MessageEvent<StepMsg | DoneMsg | ReadyMsg | ErrMsg>) => 
     btnPerturb.disabled = !demo.coverageOK;
     btnLoadSmiles.disabled = false;
     molSelect.disabled = false;
+    refreshVibButton();
     if (msg.converged) {
       setStatus(
         `relaxed (maxF < 0.02) — E = ${msg.energy.toFixed(4)} Ha in ${msg.elapsedMs.toFixed(0)} ms`,
@@ -631,20 +691,78 @@ worker.onmessage = (ev: MessageEvent<StepMsg | DoneMsg | ReadyMsg | ErrMsg>) => 
     }
     return;
   }
+  if (msg.type === "vib-progress") {
+    vibStatusEl.textContent = `computing Hessian… ${msg.done}/${msg.total} force columns`;
+    return;
+  }
+  if (msg.type === "vib-done") {
+    demo.vibComputing = false;
+    vibN3 = msg.n3;
+    vibNModes = msg.nModes;
+    vibModes = msg.modes;
+    vibEquilibrium = Float64Array.from(msg.equilibrium);
+    vibScratch.buf = new Float32Array(msg.n3);
+    demo.vibFrequencies = msg.frequencies.slice();
+    demo.vibIsLinear = msg.isLinear;
+    demo.vibImaginaryCount = msg.frequencies.filter((f) => f < 0).length;
+    demo.vibMaxForce = msg.maxForce;
+    demo.vibReady = true;
+    demo.vibSelectedMode = null;
+    demo.vibAnimating = false;
+
+    // Adopt the (possibly further-relaxed) equilibrium so the animation
+    // oscillates around a true stationary point and Perturb stays sensible.
+    currentPositions = Float32Array.from(msg.equilibrium);
+    basePositions = Float64Array.from(msg.equilibrium);
+    demo.positions = Array.from(currentPositions);
+    if (view) view.update(currentPositions);
+
+    drawSpectrum();
+    spectrumEl.style.display = "block";
+    vibNoteEl.style.display = "block";
+    vibModeEl.style.display = "none";
+    btnVibrations.disabled = !demo.coverageOK;
+    btnOptimize.disabled = !demo.coverageOK;
+    btnPerturb.disabled = !demo.coverageOK;
+    molSelect.disabled = false;
+    btnLoadSmiles.disabled = false;
+
+    const imag = demo.vibImaginaryCount;
+    const kind = msg.isLinear ? "linear" : "non-linear";
+    const relaxNote = msg.relaxed ? " (relaxed to stationary point first)" : "";
+    if (imag > 0) {
+      setVibStatus(
+        `${msg.nModes} modes, ${kind} — ${imag} imaginary (negative): not a true minimum. ` +
+          `Click a stick to animate.${relaxNote}`,
+        "warn",
+      );
+    } else {
+      setVibStatus(
+        `${msg.nModes} real modes, ${kind}, maxF ${msg.maxForce.toExponential(1)} ` +
+          `in ${msg.elapsedMs.toFixed(0)} ms. Click a stick to animate.${relaxNote}`,
+        "good",
+      );
+    }
+    return;
+  }
   if (msg.type === "error") {
     demo.error = msg.message;
     demo.optimizing = false;
+    demo.vibComputing = false;
     btnOptimize.disabled = !demo.coverageOK;
     btnPerturb.disabled = !demo.coverageOK;
     btnLoadSmiles.disabled = false;
+    btnVibrations.disabled = !(demo.ready && demo.coverageOK && demo.atomCount >= 2);
     molSelect.disabled = false;
     setStatus(`error: ${msg.message}`, "warn");
+    setVibStatus(`error: ${msg.message}`, "warn");
   }
 };
 
 function optimize(opts: { embedding?: boolean } = {}): void {
   if (!demo.ready || demo.optimizing) return;
   if (!demo.coverageOK) return; // elements outside ANI-2x -> no energies
+  resetVibrations(); // geometry is about to move; any modes become stale
   demo.optimizing = true;
   demo.done = false;
   demo.energies = [];
@@ -652,6 +770,7 @@ function optimize(opts: { embedding?: boolean } = {}): void {
   btnOptimize.disabled = true;
   btnPerturb.disabled = true;
   btnLoadSmiles.disabled = true;
+  btnVibrations.disabled = true;
   molSelect.disabled = true;
   const t0 = performance.now();
   rElapsed.textContent = "…";
@@ -669,6 +788,181 @@ function optimize(opts: { embedding?: boolean } = {}): void {
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
+}
+
+// ---------------------------------------------------------------------------
+// Vibrational normal-mode analysis (separate view state — does not disturb the
+// optimize flow). The worker builds the Hessian off-thread; here we draw the
+// harmonic spectrum and animate the atoms along a chosen mode.
+// ---------------------------------------------------------------------------
+function setVibStatus(text: string, cls: "" | "good" | "warn" = ""): void {
+  vibStatusEl.textContent = text;
+  vibStatusEl.className = cls;
+}
+
+/** Whether normal-mode analysis is currently allowed for the loaded molecule. */
+function vibAllowed(): boolean {
+  return demo.ready && demo.coverageOK && demo.atomCount >= 2 && !demo.optimizing && !demo.vibComputing;
+}
+
+function refreshVibButton(): void {
+  btnVibrations.disabled = !vibAllowed();
+}
+
+/** Clear any computed modes/animation (called when the geometry changes). */
+function resetVibrations(): void {
+  stopVibAnimation();
+  demo.vibReady = false;
+  demo.vibFrequencies = [];
+  demo.vibSelectedMode = null;
+  demo.vibImaginaryCount = 0;
+  demo.vibMaxForce = null;
+  vibNModes = 0;
+  vibModes = new Float64Array(0);
+  spectrumEl.style.display = "none";
+  vibNoteEl.style.display = "none";
+  vibModeEl.style.display = "none";
+  spectrumEl.innerHTML = "";
+}
+
+/** Kick off a Hessian + normal-mode computation in the worker. */
+function computeVibrations(): void {
+  if (!vibAllowed()) return;
+  resetVibrations();
+  demo.vibComputing = true;
+  btnVibrations.disabled = true;
+  btnOptimize.disabled = true;
+  btnPerturb.disabled = true;
+  molSelect.disabled = true;
+  btnLoadSmiles.disabled = true;
+  setVibStatus("computing Hessian (6N force evals, off-thread)…");
+  worker.postMessage({
+    type: "vibrations",
+    symbols,
+    positions: Array.from(currentPositions),
+  });
+}
+
+// --- spectrum geometry (viewBox 0 0 300 72) ---
+const SPEC_W = 300;
+const SPEC_H = 72;
+const SPEC_L = 6; // left margin
+const SPEC_R = 8; // right margin
+const SPEC_TOP = 8; // stick top
+const SPEC_BASE = 54; // baseline (axis) y
+const STICK_TOP = 12; // sticks rise to here (uniform height — see honesty note)
+
+function spectrumAxisMax(): number {
+  let m = 0;
+  for (const f of demo.vibFrequencies) m = Math.max(m, Math.abs(f));
+  // round up to the next 500, floor 4000 so X-H stretches sit comfortably
+  return Math.max(4000, Math.ceil((m * 1.05) / 500) * 500);
+}
+
+function freqToX(absFreq: number, axisMax: number): number {
+  return SPEC_L + (absFreq / axisMax) * (SPEC_W - SPEC_L - SPEC_R);
+}
+
+/** Draw the clickable stick spectrum of harmonic wavenumbers (equal heights). */
+function drawSpectrum(): void {
+  const freqs = demo.vibFrequencies;
+  if (!freqs.length) {
+    spectrumEl.innerHTML = "";
+    return;
+  }
+  const axisMax = spectrumAxisMax();
+  const parts: string[] = [];
+  // baseline axis
+  parts.push(
+    `<line class="axis" x1="${SPEC_L}" y1="${SPEC_BASE}" x2="${SPEC_W - SPEC_R}" y2="${SPEC_BASE}" />`,
+  );
+  // x-axis ticks + labels every 1000 cm^-1
+  for (let t = 0; t <= axisMax; t += 1000) {
+    const x = freqToX(t, axisMax);
+    parts.push(`<line class="axis" x1="${x.toFixed(1)}" y1="${SPEC_BASE}" x2="${x.toFixed(1)}" y2="${SPEC_BASE + 3}" />`);
+    parts.push(`<text x="${x.toFixed(1)}" y="${SPEC_H - 4}" text-anchor="middle">${t}</text>`);
+  }
+  parts.push(
+    `<text x="${SPEC_W - SPEC_R}" y="${STICK_TOP - 2}" text-anchor="end">cm⁻¹</text>`,
+  );
+  // sticks (uniform height) + wide transparent hit targets
+  for (let i = 0; i < freqs.length; i++) {
+    const f = freqs[i]!;
+    const x = freqToX(Math.abs(f), axisMax);
+    const cls = `stick${i === demo.vibSelectedMode ? " sel" : ""}${f < 0 ? " imag" : ""}`;
+    parts.push(
+      `<line class="${cls}" x1="${x.toFixed(1)}" y1="${SPEC_BASE}" x2="${x.toFixed(1)}" y2="${STICK_TOP}" />`,
+    );
+    parts.push(
+      `<rect class="hit" data-mode="${i}" x="${(x - 4).toFixed(1)}" y="${STICK_TOP - 2}" width="8" height="${SPEC_BASE - STICK_TOP + 4}" />`,
+    );
+  }
+  spectrumEl.innerHTML = parts.join("");
+}
+
+function modeCharacter(freq: number): string {
+  const f = Math.abs(freq);
+  if (freq < 0) return "imaginary (negative curvature)";
+  if (f > 2800) return "X–H stretch region";
+  if (f > 1500) return "double-bond / bend region";
+  return "";
+}
+
+/** Select a mode by index: label it, and start the oscillation animation. */
+function selectMode(i: number): void {
+  if (!demo.vibReady || i < 0 || i >= vibNModes) return;
+  demo.vibSelectedMode = i;
+  const f = demo.vibFrequencies[i]!;
+  const sign = f < 0 ? "i" : "";
+  const character = modeCharacter(f);
+  vibFreqEl.textContent =
+    `mode ${i + 1}/${vibNModes}: ${Math.abs(f).toFixed(1)}${sign} cm⁻¹` +
+    (character ? ` · ${character}` : "");
+  vibModeEl.style.display = "block";
+  drawSpectrum(); // repaint to highlight the selected stick
+  // start animation
+  demo.vibAnimating = true;
+  vibClock = 0;
+  vibLastT = performance.now();
+}
+
+/** Compute the oscillating geometry for the selected mode at animation time t. */
+function vibPositionsAt(t: number): Float32Array {
+  const out = vibScratch.buf;
+  const i = demo.vibSelectedMode;
+  if (i === null || vibN3 === 0 || out.length !== vibN3) {
+    return currentPositions;
+  }
+  const base = i * vibN3;
+  const s = demo.vibAmplitude * Math.sin(2 * Math.PI * VIB_DISPLAY_HZ * t);
+  for (let k = 0; k < vibN3; k++) {
+    out[k] = vibEquilibrium[k]! + s * vibModes[base + k]!;
+  }
+  return out;
+}
+
+/** Advance and paint the mode animation; called from the render loop. */
+function updateVibAnimation(): void {
+  if (!demo.vibAnimating || demo.vibSelectedMode === null) return;
+  const now = performance.now();
+  vibClock += (now - vibLastT) / 1000;
+  vibLastT = now;
+  const p = vibPositionsAt(vibClock);
+  if (view) view.update(p);
+  if (demo.selected.length) syncMarkers();
+}
+
+/** Stop animating and snap the atoms back to the equilibrium geometry. */
+function stopVibAnimation(): void {
+  demo.vibAnimating = false;
+  demo.vibSelectedMode = null;
+  vibModeEl.style.display = "none";
+  if (vibEquilibrium.length && view) {
+    view.update(vibEquilibrium);
+  } else if (view && currentPositions.length) {
+    view.update(currentPositions);
+  }
+  if (demo.vibReady) drawSpectrum();
 }
 
 // ---------------------------------------------------------------------------
@@ -782,6 +1076,27 @@ function clearSketch(): void {
   loadSmiles: loadCustomMolecule,
 };
 
+// Headless-verification handle for the vibrations flow: drive compute/select/
+// stop without a mouse, and sample the animated geometry at an arbitrary time
+// so a harness can confirm the atoms actually move along the mode.
+(window as unknown as {
+  __vib: {
+    compute: () => void;
+    selectMode: (i: number) => void;
+    stop: () => void;
+    sampleAt: (t: number) => number[];
+    frequencies: () => number[];
+    ready: () => boolean;
+  };
+}).__vib = {
+  compute: computeVibrations,
+  selectMode,
+  stop: stopVibAnimation,
+  sampleAt: (t: number) => Array.from(vibPositionsAt(t)),
+  frequencies: () => demo.vibFrequencies.slice(),
+  ready: () => demo.vibReady,
+};
+
 // ---------------------------------------------------------------------------
 // Events.
 // ---------------------------------------------------------------------------
@@ -810,6 +1125,19 @@ btnToggleRt.addEventListener("click", () => {
 
 // clear measurement selection
 btnClearSel.addEventListener("click", clearSelection);
+
+// normal-mode analysis
+btnVibrations.addEventListener("click", () => computeVibrations());
+btnVibStop.addEventListener("click", () => stopVibAnimation());
+vibAmpEl.addEventListener("input", () => {
+  demo.vibAmplitude = Number(vibAmpEl.value);
+});
+// click a spectrum stick's hit target to select + animate that mode
+spectrumEl.addEventListener("click", (e) => {
+  const target = e.target as Element | null;
+  const attr = target?.getAttribute?.("data-mode");
+  if (attr !== null && attr !== undefined) selectMode(Number(attr));
+});
 
 // structure sketcher (JSME modal)
 btnOpenSketch.addEventListener("click", () => void openSketch());
@@ -864,6 +1192,7 @@ function loop(): void {
   requestAnimationFrame(loop);
   demo.frameCount++;
   if (controls) controls.update();
+  updateVibAnimation(); // oscillate atoms along the selected normal mode
   if (demo.selected.length) syncMarkers(); // keep markers glued during orbit
   if (renderer) {
     if (rt && demo.rtEnabled) rt.render(scene, camera);

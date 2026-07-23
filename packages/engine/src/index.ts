@@ -30,6 +30,19 @@ export {
   type HessianResult,
 } from "./hessian/finiteDifference.js";
 
+// vibrations (harmonic normal-mode analysis)
+export {
+  computeNormalModes,
+  isLinearGeometry,
+  jacobiEigen,
+  type Eigen,
+  type NormalModesOptions,
+  type NormalModesResult,
+  ATOMIC_MASS,
+  VIB_CM_PER_SQRT,
+  HARTREE_TO_CM1,
+} from "./vibrations/index.js";
+
 // orbitals
 export {
   extendedHuckel,

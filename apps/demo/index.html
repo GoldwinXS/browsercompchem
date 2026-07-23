@@ -103,6 +103,22 @@
       }
       #warn.show { display: block; }
 
+      /* --- vibrational spectrum --- */
+      #vib-status { color: var(--muted); font-size: 11px; margin-top: 8px; min-height: 1.4em; line-height: 1.4; }
+      #vib-status.good { color: var(--good); }
+      #vib-status.warn { color: var(--warn); }
+      #spectrum {
+        width: 100%; height: 72px; display: block; margin-top: 8px;
+        background: #0b0e15; border: 1px solid var(--panel-border); border-radius: 6px;
+      }
+      #spectrum .stick { stroke: var(--accent); stroke-width: 1.4; }
+      #spectrum .stick.sel { stroke: var(--good); stroke-width: 2.4; }
+      #spectrum .stick.imag { stroke: var(--warn); }
+      #spectrum .hit { fill: transparent; cursor: pointer; }
+      #spectrum .axis { stroke: var(--panel-border); stroke-width: 1; }
+      #spectrum text { fill: var(--muted); font-size: 8px; font-family: var(--mono); }
+      #vib-freq { color: var(--fg); font-variant-numeric: tabular-nums; }
+
       /* --- structure sketcher (JSME) modal --- */
       #sketch-overlay {
         position: fixed; inset: 0; z-index: 50; display: none;
@@ -179,6 +195,30 @@
           <button id="clear-sel" class="mini">clear</button>
         </div>
         <div id="r-measure">select 2 atoms for distance, 3 for angle</div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">normal modes</div>
+        <div class="btns">
+          <button id="vibrations">Compute vibrations</button>
+        </div>
+        <div id="vib-status">optimize a molecule, then compute its normal modes</div>
+        <svg id="spectrum" viewBox="0 0 300 72" preserveAspectRatio="none" style="display:none"></svg>
+        <div id="vib-note" class="plot-label" style="display:none">
+          harmonic vibrational frequencies (positions only). Stick heights are
+          uniform: ANI-2x has no dipole derivatives, so true IR intensities are
+          not available. Click a stick to animate that mode.
+        </div>
+        <div id="vib-mode" style="display:none">
+          <div class="sub" style="margin-top:8px">
+            <span id="vib-freq">—</span>
+            <button id="vib-stop" class="mini">Equilibrium</button>
+          </div>
+          <div class="sub" style="margin-top:8px">
+            <label class="chk" for="vib-amp">amplitude</label>
+            <input type="range" id="vib-amp" min="0.05" max="0.6" step="0.01" value="0.3" style="flex:1; accent-color: var(--accent); cursor: pointer;" />
+          </div>
+        </div>
       </div>
     </div>
 

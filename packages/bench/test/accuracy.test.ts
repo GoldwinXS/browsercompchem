@@ -14,7 +14,7 @@ import { getProvider } from "../src/accuracy/provider.js";
 import { evaluateConformers } from "../src/accuracy/conformers.js";
 import { evaluateFrequencies } from "../src/accuracy/frequencies.js";
 import { evaluateHeats } from "../src/accuracy/heats.js";
-import { jacobiEigen } from "../src/accuracy/linalg.js";
+import { jacobiEigen } from "@browser-comp-chem/engine";
 import type { Ani2xProvider } from "@browser-comp-chem/engine";
 
 let provider: Ani2xProvider;
