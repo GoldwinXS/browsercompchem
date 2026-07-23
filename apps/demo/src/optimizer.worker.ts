@@ -25,9 +25,15 @@ import {
   Ani2xProvider,
   FireOptimizer,
   computeNormalModes,
+  extendedHuckel,
+  evaluateOrbitalOnGrid,
+  autoGridSpec,
+  marchingCubes,
+  gradientNormals,
   type EnergyForceProvider,
   type EnergyForces,
   type Molecule,
+  type ExtendedHuckelResult,
 } from "@browser-comp-chem/engine";
 
 /** Above this max force we treat a geometry as NOT a stationary point and relax it first. */
@@ -49,6 +55,16 @@ const BOND_STRETCH_SLACK = 0.7;
 const CLASH_DISTANCE = 1.15;
 
 let provider: Ani2xProvider | undefined;
+
+/**
+ * Most-recent Extended-Hueckel result + the Angstrom geometry it was computed
+ * for. Kept so a follow-up "orbital-grid" request (when the user clicks an MO)
+ * can evaluate psi on a grid without recomputing the (fast) EHT solve or
+ * re-sending the coefficients across the worker boundary. The EHT tier needs no
+ * ANI model, so these paths do not touch `provider`.
+ */
+let lastOrbitals: ExtendedHuckelResult | undefined;
+let lastOrbPositions: number[] = [];
 
 function maxAbs(a: Float64Array): number {
   let m = 0;
@@ -144,7 +160,13 @@ self.onmessage = async (ev: MessageEvent) => {
           dtMax: number;
         };
       }
-    | { type: "vibrations"; symbols: string[]; positions: number[] };
+    | { type: "vibrations"; symbols: string[]; positions: number[] }
+    | { type: "orbitals"; symbols: string[]; positions: number[] }
+    | {
+        type: "orbital-grid";
+        orbitalIndex: number;
+        isovalue: number;
+      };
 
   try {
     if (data.type === "init") {
@@ -360,6 +382,95 @@ self.onmessage = async (ev: MessageEvent) => {
           elapsedMs: performance.now() - t0,
         },
         [flatModes.buffer, eqPos.buffer],
+      );
+      return;
+    }
+
+    if (data.type === "orbitals") {
+      // Extended Hueckel MO solve. Fast and model-free (no ANI provider needed);
+      // the coefficients + AO metadata are cached for follow-up grid requests.
+      const t0 = performance.now();
+      const mol: Molecule = {
+        symbols: data.symbols,
+        positions: Float64Array.from(data.positions),
+        charge: 0,
+        multiplicity: 1,
+      };
+      const res = await extendedHuckel(mol);
+      lastOrbitals = res;
+      lastOrbPositions = data.positions.slice();
+      (self as unknown as Worker).postMessage({
+        type: "orb-done",
+        energies: Array.from(res.orbitalEnergies),
+        occupations: Array.from(res.occupations),
+        homoIndex: res.homoIndex,
+        lumoIndex: res.lumoIndex,
+        nBasis: res.nBasisFunctions,
+        nMO: res.nMO,
+        nElectrons: res.nElectrons,
+        singular: res.singular,
+        droppedCount: res.droppedCount,
+        elapsedMs: performance.now() - t0,
+      });
+      return;
+    }
+
+    if (data.type === "orbital-grid") {
+      if (!lastOrbitals) throw new Error("orbital-grid: compute orbitals first");
+      const t0 = performance.now();
+      // A grid that comfortably encloses the molecule (Angstrom world coords, so
+      // the isosurface vertices land directly on the ball-and-stick model).
+      const spec = autoGridSpec(Float64Array.from(lastOrbPositions), {
+        padding: 3.0,
+        spacing: 0.3,
+        maxDim: 72,
+      });
+      const field = evaluateOrbitalOnGrid(lastOrbitals, data.orbitalIndex, spec, (done, total) => {
+        (self as unknown as Worker).postMessage({ type: "orb-progress", done, total });
+      });
+      const sp: [number, number, number] =
+        typeof spec.spacing === "number" ? [spec.spacing, spec.spacing, spec.spacing] : spec.spacing;
+      const mcGrid = { dims: spec.dims, origin: spec.origin, spacing: sp };
+
+      const iso = Math.abs(data.isovalue);
+      // Positive lobe at +iso (outward normal toward decreasing field, sign -1);
+      // negative lobe at -iso (outward normal toward increasing field, sign +1).
+      const posMesh = marchingCubes(field, mcGrid, iso);
+      const posNormals = gradientNormals(field, mcGrid, posMesh.positions, -1);
+      const negMesh = marchingCubes(field, mcGrid, -iso);
+      const negNormals = gradientNormals(field, mcGrid, negMesh.positions, +1);
+
+      // Peak |psi| on the grid -- lets the UI keep the isovalue slider sensible.
+      let maxAbsPsi = 0;
+      for (let i = 0; i < field.length; i++) {
+        const v = Math.abs(field[i]!);
+        if (v > maxAbsPsi) maxAbsPsi = v;
+      }
+
+      (self as unknown as Worker).postMessage(
+        {
+          type: "orb-grid-done",
+          orbitalIndex: data.orbitalIndex,
+          isovalue: iso,
+          maxAbsPsi,
+          posPositions: posMesh.positions,
+          posNormals,
+          posIndices: posMesh.indices,
+          posTriangles: posMesh.triangleCount,
+          negPositions: negMesh.positions,
+          negNormals,
+          negIndices: negMesh.indices,
+          negTriangles: negMesh.triangleCount,
+          elapsedMs: performance.now() - t0,
+        },
+        [
+          posMesh.positions.buffer,
+          posNormals.buffer,
+          posMesh.indices.buffer,
+          negMesh.positions.buffer,
+          negNormals.buffer,
+          negMesh.indices.buffer,
+        ],
       );
       return;
     }

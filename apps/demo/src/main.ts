@@ -5,6 +5,7 @@ import { MOLECULES, MOLECULE_ORDER, DEFAULT_MOLECULE } from "./molecules.js";
 import { smilesToSeed, makeConformerSeeds, SMILES_EXAMPLES, rdkitVersion, type Bond } from "./rdkit.js";
 import { createSketcher, sanitizeSketchSmiles, type JsmeApplet } from "./jsme.js";
 import { distance as measureDistance, angle as measureAngle } from "./measure.js";
+import { EHT_SUPPORTED_ELEMENTS } from "@browser-comp-chem/engine";
 
 /**
  * Interactive geometry-optimization demo.
@@ -80,6 +81,16 @@ interface DemoState {
   vibAnimating: boolean; // atoms currently oscillating along a mode
   vibAmplitude: number; // visual displacement amplitude (Angstrom)
   vibMaxForce: number | null; // max force at the geometry the Hessian was built on
+  // --- extended Hückel molecular orbitals ---
+  orbComputing: boolean; // EHT solve or grid evaluation running in the worker
+  orbReady: boolean; // MO energies available for the current geometry
+  orbEnergies: number[]; // MO energies (eV), ascending
+  orbOccupations: number[]; // occupation per MO (2/1/0)
+  orbHomo: number; // HOMO index into orbEnergies (-1 if none)
+  orbLumo: number; // LUMO index into orbEnergies
+  orbSelected: number | null; // MO whose isosurface is displayed
+  orbIsovalue: number; // isosurface level (atomic units)
+  orbMeshVisible: boolean; // orbital lobes currently in the scene
 }
 const demo: DemoState = {
   webgl: false,
@@ -118,8 +129,20 @@ const demo: DemoState = {
   vibAnimating: false,
   vibAmplitude: 0.3,
   vibMaxForce: null,
+  orbComputing: false,
+  orbReady: false,
+  orbEnergies: [],
+  orbOccupations: [],
+  orbHomo: -1,
+  orbLumo: -1,
+  orbSelected: null,
+  orbIsovalue: 0.05,
+  orbMeshVisible: false,
 };
 (window as unknown as { __demo: DemoState }).__demo = demo;
+
+/** Elements the extended-Hückel tier can parametrize (same set as ANI-2x). */
+const EHT_SET = new Set(EHT_SUPPORTED_ELEMENTS);
 
 // ---------------------------------------------------------------------------
 // Seeded RNG (mulberry32) for reproducible perturbations.
@@ -177,6 +200,15 @@ const vibModeEl = $("vib-mode");
 const vibFreqEl = $("vib-freq");
 const btnVibStop = $<HTMLButtonElement>("vib-stop");
 const vibAmpEl = $<HTMLInputElement>("vib-amp");
+const btnOrbitals = $<HTMLButtonElement>("orbitals");
+const orbStatusEl = $("orb-status");
+const orbLadderEl = $("orb-ladder"); // SVG
+const orbNoteEl = $("orb-note");
+const orbDetailEl = $("orb-detail");
+const orbSelEl = $("orb-sel");
+const btnOrbClear = $<HTMLButtonElement>("orb-clear");
+const orbIsoEl = $<HTMLInputElement>("orb-iso");
+const orbIsoValEl = $("orb-iso-val");
 
 // ---------------------------------------------------------------------------
 // Persisted view preferences (auto-rotate, ray tracing). localStorage can be
@@ -430,6 +462,29 @@ let vibLastT = 0; // performance.now() of the previous animation frame
 const VIB_DISPLAY_HZ = 1.1; // visual oscillation rate (decoupled from the real cm^-1)
 const vibScratch = { buf: new Float32Array(0) }; // reused per-frame position buffer
 
+// --- orbital isosurface meshes (static between computations). Two translucent
+// lobes read over the ball-and-stick model: accent-blue +lobe, warm-gold -lobe.
+let orbPosMesh: THREE.Mesh | undefined;
+let orbNegMesh: THREE.Mesh | undefined;
+const orbPosMat = new THREE.MeshPhysicalMaterial({
+  color: 0x5b8cff,
+  metalness: 0.0,
+  roughness: 0.35,
+  transparent: true,
+  opacity: 0.45,
+  side: THREE.DoubleSide,
+  depthWrite: false, // let the molecule read through the translucent lobe
+});
+const orbNegMat = new THREE.MeshPhysicalMaterial({
+  color: 0xe6b84a,
+  metalness: 0.0,
+  roughness: 0.35,
+  transparent: true,
+  opacity: 0.45,
+  side: THREE.DoubleSide,
+  depthWrite: false,
+});
+
 /**
  * Install a geometry (symbols + flat Angstrom positions) into the scene and
  * frame the camera. Shared by the built-in dropdown and the SMILES loader.
@@ -474,6 +529,8 @@ function setGeometry(
   resetReadout();
   resetVibrations();
   refreshVibButton();
+  resetOrbitals();
+  refreshOrbButton();
 }
 
 /** Load one of the baked built-in molecules (all within the ANI-2x element set). */
@@ -597,6 +654,8 @@ function perturb(): void {
   resetReadout();
   resetVibrations();
   refreshVibButton();
+  resetOrbitals();
+  refreshOrbButton();
   setStatus(`perturbed (±${amp.toFixed(2)} A) — press Optimize to relax`, "warn");
 }
 
@@ -745,6 +804,36 @@ type VibDoneMsg = {
   elapsedMs: number;
 };
 
+type OrbDoneMsg = {
+  type: "orb-done";
+  energies: number[];
+  occupations: number[];
+  homoIndex: number;
+  lumoIndex: number;
+  nBasis: number;
+  nMO: number;
+  nElectrons: number;
+  singular: boolean;
+  droppedCount: number;
+  elapsedMs: number;
+};
+type OrbProgressMsg = { type: "orb-progress"; done: number; total: number };
+type OrbGridDoneMsg = {
+  type: "orb-grid-done";
+  orbitalIndex: number;
+  isovalue: number;
+  maxAbsPsi: number;
+  posPositions: Float32Array;
+  posNormals: Float32Array;
+  posIndices: Uint32Array;
+  posTriangles: number;
+  negPositions: Float32Array;
+  negNormals: Float32Array;
+  negIndices: Uint32Array;
+  negTriangles: number;
+  elapsedMs: number;
+};
+
 type WorkerMsg =
   | StepMsg
   | DoneMsg
@@ -752,7 +841,10 @@ type WorkerMsg =
   | ErrMsg
   | EmbedProgressMsg
   | VibProgressMsg
-  | VibDoneMsg;
+  | VibDoneMsg
+  | OrbDoneMsg
+  | OrbProgressMsg
+  | OrbGridDoneMsg;
 
 worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
   const msg = ev.data;
@@ -762,6 +854,7 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     btnPerturb.disabled = !demo.coverageOK;
     btnLoadSmiles.disabled = false;
     refreshVibButton();
+    refreshOrbButton();
     setStatus(`model ready — ${msg.variant}, ${msg.members} members`, "good");
     return;
   }
@@ -814,6 +907,7 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     btnLoadSmiles.disabled = false;
     molSelect.disabled = false;
     refreshVibButton();
+    refreshOrbButton();
     if (msg.converged) {
       setStatus(
         `relaxed (maxF < ${fireOptions(symbols.length).forceTolerance}) — E = ${msg.energy.toFixed(4)} Ha in ${msg.elapsedMs.toFixed(0)} ms`,
@@ -852,6 +946,8 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     basePositions = Float64Array.from(msg.equilibrium);
     demo.positions = Array.from(currentPositions);
     moveAtoms(currentPositions);
+    resetOrbitals(); // equilibrium may have shifted -> any orbitals are stale
+    refreshOrbButton();
 
     drawSpectrum();
     spectrumEl.style.display = "block";
@@ -881,17 +977,72 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     }
     return;
   }
+  if (msg.type === "orb-done") {
+    demo.orbComputing = false;
+    demo.orbEnergies = msg.energies.slice();
+    demo.orbOccupations = msg.occupations.slice();
+    demo.orbHomo = msg.homoIndex;
+    demo.orbLumo = msg.lumoIndex;
+    demo.orbReady = true;
+    demo.orbSelected = null;
+    drawLadder();
+    orbLadderEl.style.display = "block";
+    orbNoteEl.style.display = "block";
+    orbDetailEl.style.display = "none";
+    molSelect.disabled = false;
+    btnLoadSmiles.disabled = false;
+    btnOptimize.disabled = !demo.coverageOK;
+    btnPerturb.disabled = !demo.coverageOK;
+    refreshVibButton();
+    refreshOrbButton();
+    const eH = msg.homoIndex >= 0 ? msg.energies[msg.homoIndex]! : NaN;
+    const eL = msg.lumoIndex < msg.energies.length ? msg.energies[msg.lumoIndex]! : NaN;
+    const gap = Number.isFinite(eH) && Number.isFinite(eL) ? (eL - eH).toFixed(2) : "—";
+    const sing = msg.singular ? ` — dropped ${msg.droppedCount} near-singular` : "";
+    setOrbStatus(
+      `${msg.nMO} MOs, ${msg.nElectrons} valence e⁻. ` +
+        `HOMO ${Number.isFinite(eH) ? eH.toFixed(2) : "—"} eV, LUMO ${Number.isFinite(eL) ? eL.toFixed(2) : "—"} eV, ` +
+        `gap ${gap} eV${sing}. Click a level.`,
+      "good",
+    );
+    return;
+  }
+  if (msg.type === "orb-progress") {
+    setOrbStatus(`evaluating ψ on grid… ${msg.done}/${msg.total} slabs`);
+    return;
+  }
+  if (msg.type === "orb-grid-done") {
+    demo.orbComputing = false;
+    applyOrbMeshes(msg);
+    refreshOrbButton();
+    btnOptimize.disabled = !demo.coverageOK;
+    btnPerturb.disabled = !demo.coverageOK;
+    molSelect.disabled = false;
+    btnLoadSmiles.disabled = false;
+    const occ = demo.orbSelected !== null ? demo.orbOccupations[demo.orbSelected] ?? 0 : 0;
+    const label = orbLabel(msg.orbitalIndex);
+    setOrbStatus(
+      `${label}: ${msg.posTriangles + msg.negTriangles} triangles, ` +
+        `peak |ψ| ${msg.maxAbsPsi.toFixed(3)} au, iso ${msg.isovalue.toFixed(3)} ` +
+        `(${occ > 0 ? "occupied" : "virtual"}) in ${msg.elapsedMs.toFixed(0)} ms.`,
+      "good",
+    );
+    return;
+  }
   if (msg.type === "error") {
     demo.error = msg.message;
     demo.optimizing = false;
     demo.vibComputing = false;
+    demo.orbComputing = false;
     btnOptimize.disabled = !demo.coverageOK;
     btnPerturb.disabled = !demo.coverageOK;
     btnLoadSmiles.disabled = false;
     btnVibrations.disabled = !(demo.ready && demo.coverageOK && demo.atomCount >= 2);
     molSelect.disabled = false;
+    refreshOrbButton();
     setStatus(`error: ${msg.message}`, "warn");
     setVibStatus(`error: ${msg.message}`, "warn");
+    if (demo.orbReady || msg.message.includes("orbital")) setOrbStatus(`error: ${msg.message}`, "warn");
   }
 };
 
@@ -902,6 +1053,7 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
  */
 function beginRelaxUI(statusText: string): void {
   resetVibrations(); // geometry is about to move; any modes become stale
+  resetOrbitals(); // ...and any computed orbitals
   demo.optimizing = true;
   demo.done = false;
   demo.energies = [];
@@ -910,6 +1062,7 @@ function beginRelaxUI(statusText: string): void {
   btnPerturb.disabled = true;
   btnLoadSmiles.disabled = true;
   btnVibrations.disabled = true;
+  btnOrbitals.disabled = true;
   molSelect.disabled = true;
   const t0 = performance.now();
   rElapsed.textContent = "…";
@@ -996,10 +1149,12 @@ function resetVibrations(): void {
 function computeVibrations(): void {
   if (!vibAllowed()) return;
   resetVibrations();
+  resetOrbitals(); // the worker may relax first -> any orbitals become stale
   demo.vibComputing = true;
   btnVibrations.disabled = true;
   btnOptimize.disabled = true;
   btnPerturb.disabled = true;
+  btnOrbitals.disabled = true;
   molSelect.disabled = true;
   btnLoadSmiles.disabled = true;
   setVibStatus("computing Hessian (6N force evals, off-thread)…");
@@ -1130,6 +1285,242 @@ function stopVibAnimation(): void {
     moveAtoms(currentPositions);
   }
   if (demo.vibReady) drawSpectrum();
+}
+
+// ---------------------------------------------------------------------------
+// Extended Hückel molecular orbitals (separate view state). The worker runs the
+// EHT solve (fast, model-free) and, on demand, evaluates a chosen MO's psi on a
+// grid and marches it into +/- isosurface meshes. Here we draw the energy
+// ladder and manage the two translucent lobe meshes over the ball-and-stick.
+// ---------------------------------------------------------------------------
+function setOrbStatus(text: string, cls: "" | "good" | "warn" = ""): void {
+  orbStatusEl.textContent = text;
+  orbStatusEl.className = cls;
+}
+
+/** All elements within the EHT parameter set? (EHT needs no ANI model.) */
+function ehtCoverage(): boolean {
+  return symbols.length > 0 && symbols.every((s) => EHT_SET.has(s));
+}
+
+/** Whether an EHT solve is currently allowed for the loaded molecule. */
+function orbAllowed(): boolean {
+  return ehtCoverage() && demo.atomCount >= 1 && !demo.optimizing && !demo.orbComputing && !demo.vibComputing;
+}
+
+function refreshOrbButton(): void {
+  btnOrbitals.disabled = !orbAllowed();
+}
+
+/** Label an MO relative to the frontier (HOMO / LUMO / HOMO-k / LUMO+k / MO n). */
+function orbLabel(i: number): string {
+  const h = demo.orbHomo;
+  const l = demo.orbLumo;
+  if (i === h) return "HOMO";
+  if (i === l) return "LUMO";
+  if (h >= 0 && i < h) return `HOMO−${h - i}`;
+  if (l >= 0 && i > l) return `LUMO+${i - l}`;
+  return `MO ${i + 1}`;
+}
+
+/** Remove and dispose the orbital lobe meshes (does NOT recompile the tracer). */
+function clearOrbMeshes(): void {
+  for (const m of [orbPosMesh, orbNegMesh]) {
+    if (m) {
+      scene.remove(m);
+      m.geometry.dispose();
+    }
+  }
+  orbPosMesh = undefined;
+  orbNegMesh = undefined;
+  demo.orbMeshVisible = false;
+}
+
+/** Clear all orbital state + meshes (called on any geometry change). */
+function resetOrbitals(): void {
+  clearOrbMeshes();
+  compileTracer(); // static-mesh set changed -> re-bake the tracer BVH
+  demo.orbReady = false;
+  demo.orbEnergies = [];
+  demo.orbOccupations = [];
+  demo.orbHomo = -1;
+  demo.orbLumo = -1;
+  demo.orbSelected = null;
+  orbLadderEl.style.display = "none";
+  orbNoteEl.style.display = "none";
+  orbDetailEl.style.display = "none";
+  orbLadderEl.innerHTML = "";
+}
+
+/** Kick off an extended-Hückel MO computation in the worker. */
+function computeOrbitals(): void {
+  if (!orbAllowed()) return;
+  resetOrbitals();
+  demo.orbComputing = true;
+  btnOrbitals.disabled = true;
+  setOrbStatus("solving extended Hückel MOs…");
+  worker.postMessage({
+    type: "orbitals",
+    symbols,
+    positions: Array.from(currentPositions),
+  });
+}
+
+// --- ladder geometry (viewBox 0 0 300 200) ---
+const LAD_XL = 10;
+const LAD_XR = 268; // leave room on the right for HOMO/LUMO labels
+const LAD_TOP = 14;
+const LAD_BOTTOM = 186;
+
+/** Draw the clickable MO energy ladder. Occupied solid, virtual dashed;
+ * degenerate levels are spread horizontally so each is individually clickable. */
+function drawLadder(): void {
+  const E = demo.orbEnergies;
+  if (!E.length) {
+    orbLadderEl.innerHTML = "";
+    return;
+  }
+  let emin = Infinity;
+  let emax = -Infinity;
+  for (const e of E) {
+    if (e < emin) emin = e;
+    if (e > emax) emax = e;
+  }
+  // Clamp the top of the axis so a lone very-high virtual MO cannot compress the
+  // frontier region into invisibility; out-of-range levels pin to the top edge.
+  const eLumo = demo.orbLumo >= 0 && demo.orbLumo < E.length ? E[demo.orbLumo]! : emax;
+  const axisMin = emin - 1;
+  const axisMax = Math.min(emax, eLumo + 16) + 1;
+  const span = axisMax - axisMin || 1;
+  const yFor = (e: number): number => {
+    const c = Math.max(axisMin, Math.min(axisMax, e));
+    return LAD_TOP + ((axisMax - c) / span) * (LAD_BOTTOM - LAD_TOP);
+  };
+
+  // Group indices whose energies are (near) degenerate so they can share a row.
+  const groups: number[][] = [];
+  for (let i = 0; i < E.length; i++) {
+    const prev = groups[groups.length - 1];
+    if (prev && Math.abs(E[i]! - E[prev[0]!]!) < 1e-4) prev.push(i);
+    else groups.push([i]);
+  }
+
+  const parts: string[] = [];
+  // zero-energy reference line, if in range
+  if (axisMin < 0 && axisMax > 0) {
+    const y0 = yFor(0);
+    parts.push(`<line class="zero" x1="${LAD_XL}" y1="${y0.toFixed(1)}" x2="${LAD_XR}" y2="${y0.toFixed(1)}" />`);
+    parts.push(`<text x="${LAD_XR + 2}" y="${(y0 + 3).toFixed(1)}">0</text>`);
+  }
+
+  for (const group of groups) {
+    const g = group.length;
+    const cellW = (LAD_XR - LAD_XL) / g;
+    for (let k = 0; k < g; k++) {
+      const i = group[k]!;
+      const e = E[i]!;
+      const y = yFor(e);
+      const x0 = LAD_XL + k * cellW + 3;
+      const x1 = LAD_XL + (k + 1) * cellW - 3;
+      const occ = demo.orbOccupations[i] ?? 0;
+      let cls = "lvl";
+      if (occ <= 0) cls += " virt";
+      if (i === demo.orbHomo) cls += " homo";
+      else if (i === demo.orbLumo) cls += " lumo";
+      if (i === demo.orbSelected) cls += " sel";
+      parts.push(`<line class="${cls}" x1="${x0.toFixed(1)}" y1="${y.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${y.toFixed(1)}" />`);
+      // electron dots for occupied levels
+      if (occ > 0) {
+        const cx = (x0 + x1) / 2;
+        const dxs = occ >= 2 ? [-4, 4] : [0];
+        for (const dxo of dxs) {
+          parts.push(`<circle class="edot" cx="${(cx + dxo).toFixed(1)}" cy="${(y - 3).toFixed(1)}" r="1.4" />`);
+        }
+      }
+      // wide transparent hit target (full row height slice for this cell)
+      parts.push(
+        `<rect class="hit" data-orb="${i}" x="${(LAD_XL + k * cellW).toFixed(1)}" y="${(y - 5).toFixed(1)}" width="${cellW.toFixed(1)}" height="10" />`,
+      );
+    }
+  }
+
+  // HOMO / LUMO labels at the right edge.
+  if (demo.orbHomo >= 0) {
+    parts.push(`<text class="lbl" x="${LAD_XR + 2}" y="${(yFor(E[demo.orbHomo]!) + 3).toFixed(1)}">HOMO</text>`);
+  }
+  if (demo.orbLumo >= 0 && demo.orbLumo < E.length) {
+    parts.push(`<text class="lbl" x="${LAD_XR + 2}" y="${(yFor(E[demo.orbLumo]!) + 3).toFixed(1)}">LUMO</text>`);
+  }
+  // axis extent labels
+  parts.push(`<text x="${LAD_XL}" y="${LAD_TOP - 4}">${axisMax.toFixed(0)} eV</text>`);
+  parts.push(`<text x="${LAD_XL}" y="${(LAD_BOTTOM + 10).toFixed(1)}">${axisMin.toFixed(0)} eV</text>`);
+
+  orbLadderEl.innerHTML = parts.join("");
+}
+
+/** Select an MO: label it and request its isosurface grid from the worker. */
+function selectOrbital(i: number): void {
+  if (!demo.orbReady || i < 0 || i >= demo.orbEnergies.length) return;
+  if (demo.orbComputing) return; // don't overlap grid requests
+  demo.orbSelected = i;
+  orbDetailEl.style.display = "block";
+  const e = demo.orbEnergies[i]!;
+  const occ = demo.orbOccupations[i] ?? 0;
+  orbSelEl.textContent = `${orbLabel(i)} · ${e.toFixed(2)} eV · ${occ > 0 ? `occ ${occ}` : "virtual"}`;
+  drawLadder(); // highlight the selected level
+  requestOrbitalGrid(i);
+}
+
+/** Ask the worker to evaluate psi(orbital) on a grid and isosurface it. */
+function requestOrbitalGrid(i: number): void {
+  demo.orbComputing = true;
+  btnOrbitals.disabled = true;
+  setOrbStatus(`evaluating ψ for ${orbLabel(i)}…`);
+  worker.postMessage({ type: "orbital-grid", orbitalIndex: i, isovalue: demo.orbIsovalue });
+}
+
+/** Build a THREE.BufferGeometry from a worker isosurface payload. */
+function buildOrbGeometry(
+  positions: Float32Array,
+  normals: Float32Array,
+  indices: Uint32Array,
+): THREE.BufferGeometry {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  g.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+  g.setIndex(new THREE.BufferAttribute(indices, 1));
+  g.computeBoundingSphere();
+  return g;
+}
+
+/** Replace the lobe meshes with a freshly-isosurfaced orbital, then recompile
+ * the tracer so its static BVH knows about the new (static) geometry. */
+function applyOrbMeshes(msg: OrbGridDoneMsg): void {
+  clearOrbMeshes();
+  if (renderer) {
+    if (msg.posTriangles > 0) {
+      orbPosMesh = new THREE.Mesh(buildOrbGeometry(msg.posPositions, msg.posNormals, msg.posIndices), orbPosMat);
+      orbPosMesh.name = "orbital-positive";
+      scene.add(orbPosMesh);
+    }
+    if (msg.negTriangles > 0) {
+      orbNegMesh = new THREE.Mesh(buildOrbGeometry(msg.negPositions, msg.negNormals, msg.negIndices), orbNegMat);
+      orbNegMesh.name = "orbital-negative";
+      scene.add(orbNegMesh);
+    }
+  }
+  demo.orbMeshVisible = !!(orbPosMesh || orbNegMesh);
+  compileTracer(); // orbital meshes are static -> baked into the static BVH here
+}
+
+/** Hide the isosurface but keep the computed ladder. */
+function hideOrbitals(): void {
+  clearOrbMeshes();
+  compileTracer();
+  demo.orbSelected = null;
+  orbDetailEl.style.display = "none";
+  if (demo.orbReady) drawLadder();
+  setOrbStatus("isosurface hidden. Click a level to show another.");
 }
 
 // ---------------------------------------------------------------------------
@@ -1264,6 +1655,39 @@ function clearSketch(): void {
   ready: () => demo.vibReady,
 };
 
+// Headless-verification handle for the orbitals flow: drive compute/select/hide
+// without a mouse and inspect the resulting lobe meshes' triangle counts.
+(window as unknown as {
+  __orb: {
+    compute: () => void;
+    select: (i: number) => void;
+    hide: () => void;
+    ready: () => boolean;
+    computing: () => boolean;
+    energies: () => number[];
+    homo: () => number;
+    lumo: () => number;
+    selected: () => number | null;
+    meshInfo: () => { pos: number; neg: number; posVisible: boolean; negVisible: boolean };
+  };
+}).__orb = {
+  compute: computeOrbitals,
+  select: selectOrbital,
+  hide: hideOrbitals,
+  ready: () => demo.orbReady,
+  computing: () => demo.orbComputing,
+  energies: () => demo.orbEnergies.slice(),
+  homo: () => demo.orbHomo,
+  lumo: () => demo.orbLumo,
+  selected: () => demo.orbSelected,
+  meshInfo: () => ({
+    pos: orbPosMesh ? (orbPosMesh.geometry.index?.count ?? 0) / 3 : 0,
+    neg: orbNegMesh ? (orbNegMesh.geometry.index?.count ?? 0) / 3 : 0,
+    posVisible: orbPosMesh ? orbPosMesh.visible : false,
+    negVisible: orbNegMesh ? orbNegMesh.visible : false,
+  }),
+};
+
 // ---------------------------------------------------------------------------
 // Events.
 // ---------------------------------------------------------------------------
@@ -1306,6 +1730,24 @@ spectrumEl.addEventListener("click", (e) => {
   const target = e.target as Element | null;
   const attr = target?.getAttribute?.("data-mode");
   if (attr !== null && attr !== undefined) selectMode(Number(attr));
+});
+
+// extended Hückel orbitals
+btnOrbitals.addEventListener("click", () => computeOrbitals());
+btnOrbClear.addEventListener("click", () => hideOrbitals());
+orbIsoEl.addEventListener("input", () => {
+  demo.orbIsovalue = Number(orbIsoEl.value);
+  orbIsoValEl.textContent = demo.orbIsovalue.toFixed(3);
+});
+// re-isosurface on release (not during drag) if a level is currently shown
+orbIsoEl.addEventListener("change", () => {
+  if (demo.orbSelected !== null && !demo.orbComputing) requestOrbitalGrid(demo.orbSelected);
+});
+// click a ladder level's hit target to show its isosurface
+orbLadderEl.addEventListener("click", (e) => {
+  const target = e.target as Element | null;
+  const attr = target?.getAttribute?.("data-orb");
+  if (attr !== null && attr !== undefined) selectOrbital(Number(attr));
 });
 
 // structure sketcher (JSME modal)
@@ -1389,6 +1831,9 @@ async function boot(): Promise<void> {
   if (!demo.webgl) {
     noglEl.style.display = "flex";
   }
+  // Expose the scene for headless verification even in the raster path (the ray
+  // tracer also sets this, but it may never initialize under automation).
+  (window as unknown as { __scene: unknown }).__scene = scene;
   wireMeasurePicking();
   // Load the molecule (adds meshes) BEFORE compiling the ray tracer:
   // three-realtime-rt rejects an empty scene ("no meshes found in scene"),
