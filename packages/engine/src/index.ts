@@ -43,9 +43,41 @@ export {
   HARTREE_TO_CM1,
 } from "./vibrations/index.js";
 
-// orbitals
+// orbitals (extended Hueckel theory tier)
 export {
   extendedHuckel,
+  buildBasis,
+  buildOverlapMatrix,
+  type AtomicOrbital,
   type ExtendedHuckelOptions,
   type ExtendedHuckelResult,
 } from "./orbitals/extendedHuckel.js";
+export {
+  EHT_PARAMS,
+  EHT_SUPPORTED_ELEMENTS,
+  BOHR_PER_ANGSTROM,
+  type OrbitalType,
+  type ShellParam,
+  type ElementParam,
+} from "./orbitals/parameters.js";
+export {
+  aArray,
+  bArray,
+  radialNorm,
+  sigmaFundamental,
+  piFundamental,
+  overlap1s1s,
+} from "./orbitals/overlap.js";
+export {
+  evaluateOrbitalOnGrid,
+  autoGridSpec,
+  type GridSpec,
+} from "./orbitals/grid.js";
+
+// isosurface (marching cubes for orbital lobes)
+export {
+  marchingCubes,
+  gradientNormals,
+  type MarchingGrid,
+  type IsoMesh,
+} from "./isosurface/marchingCubes.js";
