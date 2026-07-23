@@ -6,14 +6,30 @@
  * numerics and streams per-step progress back so the UI never blocks.
  *
  * Protocol (main -> worker):
- *   { type: "init", modelDir, variant, members? }
- *   { type: "optimize", symbols, positions: number[], options }
+ *   { type: "init", modelDir, variant, members? }                      (epoch-independent)
+ *   { type: "optimize", symbols, positions: number[], options, epoch }
+ *   { type: "embed", symbols, seeds, bonds, options, epoch }
+ *   { type: "vibrations", symbols, positions: number[], epoch }
+ *   { type: "orbitals", symbols, positions: number[], epoch }
+ *   { type: "orbital-grid", orbitalIndex, isovalue, epoch }
  *
  * Protocol (worker -> main):
- *   { type: "ready", variant, members }
- *   { type: "step", step, energy, maxForce, positions: Float32Array }  (transferable)
- *   { type: "done", converged, energy, maxForce, steps, elapsedMs, positions: Float32Array }
- *   { type: "error", message }
+ *   { type: "ready", variant, members }                                (epoch-independent)
+ *   { type: "step", step, energy, maxForce, positions, epoch }  (transferable)
+ *   { type: "done", converged, energy, maxForce, steps, elapsedMs, positions, epoch }
+ *   { type: "embed-progress", seed, total, bestEnergy, epoch }
+ *   { type: "vib-progress" | "vib-done", ..., epoch }
+ *   { type: "orb-done" | "orb-progress" | "orb-grid-done", ..., epoch }
+ *   { type: "error", message, epoch? }         (epoch omitted only for "init" failures)
+ *
+ * GEOMETRY EPOCH. Every geometry-bearing request carries the main thread's
+ * current geometry epoch; the worker echoes it on every reply for that request.
+ * The main thread bumps the epoch whenever the geometry it is showing changes
+ * (new molecule, perturb) and drops any reply whose epoch is stale -- so an
+ * in-flight water solve can never repaint itself over methane. The worker also
+ * tracks the highest epoch it has seen (`latestEpoch`) so a slow reply from an
+ * abandoned geometry cannot overwrite the cached orbital solve a newer geometry
+ * depends on. "init"/"ready" model-loading messages are epoch-independent.
  *
  * The trick that lets us reuse the engine's real FireOptimizer unchanged: we
  * wrap the provider so every energy/force evaluation (one per FIRE step, at the
@@ -59,14 +75,26 @@ const CLASH_DISTANCE = 1.15;
 let provider: Ani2xProvider | undefined;
 
 /**
+ * Highest geometry epoch seen across all incoming requests. Monotonic. Used to
+ * decide whether a just-finished orbital solve still describes the geometry the
+ * main thread is showing: a solve that started while it was current but whose
+ * geometry has since been abandoned (epoch < latestEpoch by the time it lands)
+ * must NOT overwrite the cache a newer solve depends on.
+ */
+let latestEpoch = -1;
+
+/**
  * Most-recent Extended-Hueckel result + the Angstrom geometry it was computed
- * for. Kept so a follow-up "orbital-grid" request (when the user clicks an MO)
- * can evaluate psi on a grid without recomputing the (fast) EHT solve or
- * re-sending the coefficients across the worker boundary. The EHT tier needs no
- * ANI model, so these paths do not touch `provider`.
+ * for + the epoch it belongs to. Kept so a follow-up "orbital-grid" request
+ * (when the user clicks an MO) can evaluate psi on a grid without recomputing
+ * the (fast) EHT solve or re-sending the coefficients across the worker
+ * boundary. The EHT tier needs no ANI model, so these paths do not touch
+ * `provider`. `lastOrbEpoch` guards the grid path against evaluating a cached
+ * solve that belongs to a different geometry than the request.
  */
 let lastOrbitals: ExtendedHuckelResult | undefined;
 let lastOrbPositions: number[] = [];
+let lastOrbEpoch = -1;
 
 function maxAbs(a: Float64Array): number {
   let m = 0;
@@ -115,7 +143,10 @@ function geometryViolations(
 class ReportingProvider implements EnergyForceProvider {
   readonly name = "ani2x-reporting";
   private step = 0;
-  constructor(private readonly inner: Ani2xProvider) {}
+  constructor(
+    private readonly inner: Ani2xProvider,
+    private readonly epoch: number,
+  ) {}
 
   async energyForces(mol: Molecule): Promise<EnergyForces> {
     const res = await this.inner.energyForces(mol);
@@ -129,6 +160,7 @@ class ReportingProvider implements EnergyForceProvider {
       energy: res.energy,
       maxForce,
       positions: pos,
+      epoch: this.epoch,
     };
     (self as unknown as Worker).postMessage(msg, [pos.buffer]);
     this.step += 1;
@@ -148,6 +180,7 @@ self.onmessage = async (ev: MessageEvent) => {
           maxSteps: number;
           dtMax: number;
         };
+        epoch: number;
       }
     | {
         type: "embed";
@@ -161,8 +194,9 @@ self.onmessage = async (ev: MessageEvent) => {
           maxSteps: number;
           dtMax: number;
         };
+        epoch: number;
       }
-    | { type: "vibrations"; symbols: string[]; positions: number[] }
+    | { type: "vibrations"; symbols: string[]; positions: number[]; epoch: number }
     | { type: "orbitals"; symbols: string[]; positions: number[]; epoch: number }
     | {
         type: "orbital-grid";
@@ -170,6 +204,11 @@ self.onmessage = async (ev: MessageEvent) => {
         isovalue: number;
         epoch: number;
       };
+
+  // The geometry epoch of this request (undefined only for "init"). Echoed on
+  // every reply and used in the catch so even an error respects staleness.
+  const epoch = "epoch" in data ? data.epoch : undefined;
+  if (epoch !== undefined && epoch > latestEpoch) latestEpoch = epoch;
 
   try {
     if (data.type === "init") {
@@ -194,7 +233,7 @@ self.onmessage = async (ev: MessageEvent) => {
         charge: 0,
         multiplicity: 1,
       };
-      const reporting = new ReportingProvider(provider);
+      const reporting = new ReportingProvider(provider, data.epoch);
       const fire = new FireOptimizer({
         forceTolerance: data.options.forceTolerance,
         maxSteps: data.options.maxSteps,
@@ -216,6 +255,7 @@ self.onmessage = async (ev: MessageEvent) => {
           steps: result.steps,
           elapsedMs,
           positions: finalPos,
+          epoch: data.epoch,
         },
         [finalPos.buffer],
       );
@@ -225,7 +265,7 @@ self.onmessage = async (ev: MessageEvent) => {
     if (data.type === "embed") {
       if (!provider) throw new Error("optimizer worker: model not initialized");
       if (data.seeds.length === 0) throw new Error("embed: no seeds provided");
-      const reporting = new ReportingProvider(provider);
+      const reporting = new ReportingProvider(provider, data.epoch);
       const t0 = performance.now();
       interface Cand {
         energy: number;
@@ -252,6 +292,7 @@ self.onmessage = async (ev: MessageEvent) => {
           seed: s,
           total: data.seeds.length,
           bestEnergy: best ? best.energy : null,
+          epoch: data.epoch,
         });
         const mol: Molecule = {
           symbols: data.symbols,
@@ -314,6 +355,7 @@ self.onmessage = async (ev: MessageEvent) => {
           steps: winner.steps,
           elapsedMs,
           positions: finalPos,
+          epoch: data.epoch,
         },
         [finalPos.buffer],
       );
@@ -357,6 +399,7 @@ self.onmessage = async (ev: MessageEvent) => {
             type: "vib-progress",
             done,
             total,
+            epoch: data.epoch,
           });
         },
       });
@@ -383,6 +426,7 @@ self.onmessage = async (ev: MessageEvent) => {
           relaxed,
           equilibrium: eqPos,
           elapsedMs: performance.now() - t0,
+          epoch: data.epoch,
         },
         [flatModes.buffer, eqPos.buffer],
       );
@@ -400,8 +444,15 @@ self.onmessage = async (ev: MessageEvent) => {
         multiplicity: 1,
       };
       const res = await extendedHuckel(mol);
-      lastOrbitals = res;
-      lastOrbPositions = data.positions.slice();
+      // Only adopt this solve into the shared cache if it still describes the
+      // current geometry. Two solves can be in flight (the main thread starts a
+      // new one as soon as a geometry change clears the busy flag); the older
+      // one must not clobber the cache the newer geometry's grid requests read.
+      if (data.epoch >= latestEpoch) {
+        lastOrbitals = res;
+        lastOrbPositions = data.positions.slice();
+        lastOrbEpoch = data.epoch;
+      }
 
       // Mulliken partial charges (per atom) and, per MO, its dominant AO
       // contributors -- both cheap from the coefficients + overlap we already
@@ -437,7 +488,12 @@ self.onmessage = async (ev: MessageEvent) => {
     }
 
     if (data.type === "orbital-grid") {
-      if (!lastOrbitals) throw new Error("orbital-grid: compute orbitals first");
+      // A grid request from an abandoned geometry: ignore silently (the main
+      // thread would drop the reply anyway, and evaluating it would waste work).
+      if (data.epoch < latestEpoch) return;
+      if (!lastOrbitals || lastOrbEpoch !== data.epoch) {
+        throw new Error("orbital-grid: compute orbitals first");
+      }
       const t0 = performance.now();
       // A grid that comfortably encloses the molecule (Angstrom world coords, so
       // the isosurface vertices land directly on the ball-and-stick model).
@@ -500,6 +556,7 @@ self.onmessage = async (ev: MessageEvent) => {
     (self as unknown as Worker).postMessage({
       type: "error",
       message: err instanceof Error ? err.message : String(err),
+      epoch, // undefined for "init" (always shown); stale op errors get dropped
     });
   }
 };

@@ -46,6 +46,11 @@ interface DemoState {
   webgl: boolean;
   ready: boolean;
   optimizing: boolean;
+  /** A custom molecule (typed/drawn SMILES) is being parsed+seeded by RDKit.
+   * This is a busy state distinct from optimizing/vibComputing/orbComputing: the
+   * controls are locked but no worker op is running yet. Reflected so headless
+   * harnesses can wait for the parse before asserting an idle UI. */
+  loading: boolean;
   molecule: string;
   frameCount: number; // rAF ticks — proves the main thread keeps running
   step: number;
@@ -98,6 +103,7 @@ const demo: DemoState = {
   webgl: false,
   ready: false,
   optimizing: false,
+  loading: false,
   molecule: DEFAULT_MOLECULE,
   frameCount: 0,
   step: 0,
@@ -146,15 +152,19 @@ const demo: DemoState = {
 (window as unknown as { __demo: DemoState }).__demo = demo;
 
 /**
- * Monotonic epoch for the orbitals pipeline. Bumped on every resetOrbitals (i.e.
- * any geometry change or fresh compute). Each "orbitals"/"orbital-grid" request
- * carries the current epoch and the worker echoes it back; a response whose epoch
- * no longer matches is stale (the molecule changed after it was requested) and is
- * dropped. This is the fix for the "switch molecule mid-solve leaves the previous
- * molecule's ladder/lobes on screen" bug -- an in-flight water response must not
- * repaint itself over methane.
+ * Monotonic GEOMETRY epoch. Bumped once, in resetForNewGeometry(), whenever the
+ * geometry the UI is showing is replaced (a new molecule, or a perturb). EVERY
+ * worker request captures the current value and the worker echoes it on EVERY
+ * reply; any reply whose epoch no longer matches is stale -- it belongs to a
+ * geometry that has since been replaced -- and is dropped at the top of the
+ * message handler. This generalizes the original orbitals-only token: an
+ * in-flight water solve must not repaint over methane, a vib-done for the old
+ * geometry must not clobber the new one's atoms, and a stale worker error must
+ * not re-enable controls out from under the current operation. A single op
+ * (optimize/embed/vibrations/orbitals) never bumps the epoch mid-flight, so its
+ * own streamed replies always match.
  */
-let orbEpoch = 0;
+let geomEpoch = 0;
 
 /** Elements the extended-Hückel tier can parametrize (same set as ANI-2x). */
 const EHT_SET = new Set(EHT_SUPPORTED_ELEMENTS);
@@ -524,6 +534,77 @@ const orbNegMat = new THREE.MeshPhysicalMaterial({
   depthWrite: false,
 });
 
+// ---------------------------------------------------------------------------
+// Control gating. Every heavy worker operation (optimize / embed / vibrations /
+// orbitals / orbital-grid) and the async SMILES parse funnels its button state
+// through this ONE pair: lock everything that could change the geometry or start
+// a second op, then restore each control to its idle-correct state per the
+// coverage rules. Centralizing this is what keeps a failed op from leaving a
+// button stuck disabled and keeps every future op consistent -- a new feature
+// locks/restores here rather than re-deriving the enable conditions inline.
+// (Measurement/atom-picking and the view toggles are intentionally NOT locked:
+// measuring atoms during a relaxation is a supported interaction.)
+// ---------------------------------------------------------------------------
+function lockControlsForCompute(): void {
+  molSelect.disabled = true;
+  btnLoadSmiles.disabled = true;
+  btnOpenSketch.disabled = true;
+  btnPerturb.disabled = true;
+  btnOptimize.disabled = true;
+  btnVibrations.disabled = true;
+  btnOrbitals.disabled = true;
+}
+
+/**
+ * Restore every gated control to its idle state. Optimize/Perturb need the
+ * ANI-2x element set (coverageOK); vibrations/orbitals decide via their own
+ * allowed() predicates (refreshVibButton/refreshOrbButton read the live flags,
+ * so this is correct even while another flag is still settling).
+ */
+function restoreIdleControls(): void {
+  molSelect.disabled = false;
+  btnLoadSmiles.disabled = false;
+  btnOpenSketch.disabled = false;
+  const canRelax = demo.ready && demo.coverageOK;
+  btnPerturb.disabled = !canRelax;
+  btnOptimize.disabled = !canRelax;
+  refreshVibButton();
+  refreshOrbButton();
+}
+
+/**
+ * The SINGLE reset path for a geometry change. Everything that must be cleared
+ * when the geometry the UI shows is replaced lives here, so callers (setGeometry
+ * and perturb) invoke exactly one function and any future derived feature
+ * registers its teardown here rather than in each caller:
+ *  - bump the geometry epoch so every in-flight worker reply for the old
+ *    geometry is dropped, and locally clear the busy flags for those abandoned
+ *    ops (their completions will never arrive to clear them);
+ *  - clear the optimization readout + energy plot;
+ *  - invalidate vibrations (modes/animation) and orbitals (data + lobe meshes),
+ *    preserving the existing "invalidate on motion" semantics;
+ *  - clear any warning;
+ *  - clear the selection/markers (skipped for perturb, which keeps the same
+ *    atoms and so keeps the measurement).
+ * resetVibrations/resetOrbitals own their own tracer recompile (they change the
+ * static mesh set), so the tracer ends consistent with the cleared scene.
+ */
+function resetForNewGeometry(opts: { keepSelection?: boolean } = {}): void {
+  geomEpoch++; // invalidate every in-flight worker reply for the old geometry
+  demo.optimizing = false; // abandon any relaxation streaming for the old geometry
+  setWarn("");
+  if (!opts.keepSelection) clearSelection();
+  resetReadout();
+  resetVibrations(); // clears demo.vibComputing (abandoned Hessian)
+  resetOrbitals(); // clears demo.orbComputing + lobe meshes (abandoned solve/grid)
+  // The abandoned op's completion reply is now stale and will be dropped, so it
+  // can never restore the controls it locked -- restore them here. A caller that
+  // is about to start a fresh op on this new geometry (loadCustomMolecule ->
+  // embed, which calls beginRelaxUI) re-locks synchronously right after, so this
+  // transient enable is never observable; every other caller ends idle.
+  restoreIdleControls();
+}
+
 /**
  * Install a geometry (symbols + flat Angstrom positions) into the scene and
  * frame the camera. Shared by the built-in dropdown and the SMILES loader.
@@ -544,7 +625,6 @@ function setGeometry(
   demo.atomCount = newSymbols.length;
   demo.symbols = newSymbols;
   demo.positions = Array.from(currentPositions);
-  clearSelection();
 
   if (view && renderer) view.dispose(scene);
   if (renderer) {
@@ -565,11 +645,11 @@ function setGeometry(
     camera.lookAt(c);
     compileTracer();
   }
-  resetReadout();
-  resetVibrations();
-  refreshVibButton();
-  resetOrbitals();
-  refreshOrbButton();
+
+  // One reset owns readout/vibrations/orbitals/selection/warnings + the epoch
+  // bump. Runs after the new view is in the scene so resetOrbitals()'s tracer
+  // recompile bakes the new atom/bond mesh set into the BVH.
+  resetForNewGeometry();
 }
 
 /** Load one of the baked built-in molecules (all within the ANI-2x element set). */
@@ -606,13 +686,23 @@ async function loadSmiles(): Promise<void> {
  */
 async function loadCustomMolecule(smiles: string): Promise<void> {
   if (!smiles) return;
-  if (demo.optimizing) return;
+  // Never start a new geometry on top of an in-flight worker op. The controls
+  // that reach here (Load / Draw->Use) are locked during a compute, but the
+  // sketcher modal can outlive the click that opened it, so guard explicitly:
+  // the stale-epoch gate would drop the old op's reply, yet cleanly refusing is
+  // clearer than racing.
+  if (demo.optimizing || demo.vibComputing || demo.orbComputing || demo.loading) return;
   setWarn("");
-  btnLoadSmiles.disabled = true;
+  // Lock the geometry/compute controls for the whole async parse so a dropdown
+  // switch or second Load can't interleave with the awaited RDKit calls. The
+  // loading flag makes this busy window observable (no worker op runs yet).
+  demo.loading = true;
+  lockControlsForCompute();
   setStatus("parsing SMILES…");
   try {
     if (demo.rdkitVersion === null) demo.rdkitVersion = await rdkitVersion();
     const seed = await smilesToSeed(smiles);
+    demo.loading = false; // parse done; from here it's setGeometry (+ maybe embed)
     lastCustomSmiles = seed.canonicalSmiles;
     demo.molecule = `smiles:${seed.canonicalSmiles}`;
     demo.isCustom = true;
@@ -624,38 +714,39 @@ async function loadCustomMolecule(smiles: string): Promise<void> {
     setGeometry(seed.symbols, seed.positions, seed.bonds);
 
     if (!demo.coverageOK) {
-      btnOptimize.disabled = true;
-      btnPerturb.disabled = true;
       setWarn(
         `contains ${seed.unsupported.join(", ")} — outside ANI-2x (H,C,N,O,F,S,Cl). ` +
           `Structure shown for display only; Optimize disabled.`,
       );
       setStatus(`loaded ${seed.symbols.length} atoms — display only`, "warn");
+      restoreIdleControls(); // coverage gates Optimize/Perturb off; the rest re-enable
       return;
     }
 
-    setStatus(`embedding 3D geometry for ${seed.symbols.length} atoms…`);
-    // The seed is a planarity-broken 2D layout; relax it into a real 3D minimum
-    // with ANI-2x. For small molecules run a cheap multi-seed conformer search
-    // (several structured 3D starts, keep the lowest-energy relaxation) to avoid
-    // the bad folded local minima a single tiny-jitter start can fall into.
     if (demo.ready) {
+      setStatus(`embedding 3D geometry for ${seed.symbols.length} atoms…`);
+      // The seed is a planarity-broken 2D layout; relax it into a real 3D minimum
+      // with ANI-2x. For small molecules run a cheap multi-seed conformer search
+      // (several structured 3D starts, keep the lowest-energy relaxation) to avoid
+      // the bad folded local minima a single tiny-jitter start can fall into.
+      // embed/optimize -> beginRelaxUI keeps the controls locked; do NOT restore.
       if (seed.symbols.length <= EMBED_MAX_ATOMS) {
         embed(seed.symbols, seed.positions, seed.bonds);
       } else {
         optimize({ embedding: true });
       }
     } else {
-      btnPerturb.disabled = true;
-      btnOptimize.disabled = true;
-      setStatus("model still loading — will embed once ready…");
+      // Model not up yet: show the geometry, restore idle controls (Optimize/
+      // Perturb stay off until 'ready'; orbitals are model-free so they enable).
+      setStatus("model still loading — press Optimize once the model is ready…");
+      restoreIdleControls();
     }
   } catch (err) {
+    demo.loading = false;
     const msg = err instanceof Error ? err.message : String(err);
     setWarn(`SMILES error: ${msg}`);
     setStatus("SMILES parse failed", "warn");
-  } finally {
-    btnLoadSmiles.disabled = false;
+    restoreIdleControls(); // parse failed -> back to an idle, usable UI
   }
 }
 
@@ -690,11 +781,11 @@ function perturb(): void {
   currentPositions = p;
   demo.positions = Array.from(currentPositions); // keep the headless mirror in sync
   moveAtoms(currentPositions);
-  resetReadout();
-  resetVibrations();
-  refreshVibButton();
-  resetOrbitals();
-  refreshOrbButton();
+  // Same single reset path as a molecule change, but keep the selection: perturb
+  // moves the same atoms, so a measurement stays meaningful (markers re-glue in
+  // the render loop). This also bumps the epoch, invalidating any in-flight
+  // worker reply keyed to the pre-perturb geometry.
+  resetForNewGeometry({ keepSelection: true });
   setStatus(`perturbed (±${amp.toFixed(2)} A) — press Optimize to relax`, "warn");
 }
 
@@ -823,12 +914,12 @@ const worker = new Worker(new URL("./optimizer.worker.ts", import.meta.url), {
   type: "module",
 });
 
-type StepMsg = { type: "step"; step: number; energy: number; maxForce: number; positions: Float32Array };
-type DoneMsg = { type: "done"; converged: boolean; energy: number; maxForce: number; steps: number; elapsedMs: number; positions: Float32Array };
+type StepMsg = { type: "step"; step: number; energy: number; maxForce: number; positions: Float32Array; epoch: number };
+type DoneMsg = { type: "done"; converged: boolean; energy: number; maxForce: number; steps: number; elapsedMs: number; positions: Float32Array; epoch: number };
 type ReadyMsg = { type: "ready"; variant: string; members: number };
-type ErrMsg = { type: "error"; message: string };
-type EmbedProgressMsg = { type: "embed-progress"; seed: number; total: number; bestEnergy: number | null };
-type VibProgressMsg = { type: "vib-progress"; done: number; total: number };
+type ErrMsg = { type: "error"; message: string; epoch?: number };
+type EmbedProgressMsg = { type: "embed-progress"; seed: number; total: number; bestEnergy: number | null; epoch: number };
+type VibProgressMsg = { type: "vib-progress"; done: number; total: number; epoch: number };
 type VibDoneMsg = {
   type: "vib-done";
   frequencies: number[];
@@ -841,6 +932,7 @@ type VibDoneMsg = {
   relaxed: boolean;
   equilibrium: Float32Array;
   elapsedMs: number;
+  epoch: number;
 };
 
 type OrbContribution = { atomIndex: number; aoType: string; weight: number };
@@ -892,13 +984,15 @@ type WorkerMsg =
 
 worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
   const msg = ev.data;
+  // Single stale-reply gate for the whole protocol: any epoch-bearing reply
+  // whose epoch no longer matches the current geometry is dropped here, before
+  // any handler can touch UI or geometry state. "ready" and "init"-failure
+  // errors carry no epoch and always pass through.
+  const msgEpoch = (msg as { epoch?: number }).epoch;
+  if (typeof msgEpoch === "number" && msgEpoch !== geomEpoch) return;
   if (msg.type === "ready") {
     demo.ready = true;
-    btnOptimize.disabled = !demo.coverageOK;
-    btnPerturb.disabled = !demo.coverageOK;
-    btnLoadSmiles.disabled = false;
-    refreshVibButton();
-    refreshOrbButton();
+    restoreIdleControls();
     setStatus(`model ready — ${msg.variant}, ${msg.members} members`, "good");
     return;
   }
@@ -946,12 +1040,7 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     rForce.textContent = msg.maxForce.toFixed(4);
     rStep.textContent = String(msg.steps);
     rElapsed.textContent = `${msg.elapsedMs.toFixed(0)} ms`;
-    btnOptimize.disabled = !demo.coverageOK;
-    btnPerturb.disabled = !demo.coverageOK;
-    btnLoadSmiles.disabled = false;
-    molSelect.disabled = false;
-    refreshVibButton();
-    refreshOrbButton();
+    restoreIdleControls();
     if (msg.converged) {
       setStatus(
         `relaxed (maxF < ${fireOptions(symbols.length).forceTolerance}) — E = ${msg.energy.toFixed(4)} Ha in ${msg.elapsedMs.toFixed(0)} ms`,
@@ -997,11 +1086,7 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     spectrumEl.style.display = "block";
     vibNoteEl.style.display = "block";
     vibModeEl.style.display = "none";
-    btnVibrations.disabled = !demo.coverageOK;
-    btnOptimize.disabled = !demo.coverageOK;
-    btnPerturb.disabled = !demo.coverageOK;
-    molSelect.disabled = false;
-    btnLoadSmiles.disabled = false;
+    restoreIdleControls();
 
     const imag = demo.vibImaginaryCount;
     const kind = msg.isLinear ? "linear" : "non-linear";
@@ -1022,7 +1107,6 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     return;
   }
   if (msg.type === "orb-done") {
-    if (msg.epoch !== orbEpoch) return; // stale: geometry changed since requested
     demo.orbComputing = false;
     demo.orbEnergies = msg.energies.slice();
     demo.orbOccupations = msg.occupations.slice();
@@ -1037,12 +1121,7 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     drawDiagram(); // build the (hidden) expanded diagram so "View" is instant
     orbSummaryEl.style.display = "block";
     orbDetailEl.style.display = "none";
-    molSelect.disabled = false;
-    btnLoadSmiles.disabled = false;
-    btnOptimize.disabled = !demo.coverageOK;
-    btnPerturb.disabled = !demo.coverageOK;
-    refreshVibButton();
-    refreshOrbButton();
+    restoreIdleControls();
     const eH = msg.homoIndex >= 0 ? msg.energies[msg.homoIndex]! : NaN;
     const eL = msg.lumoIndex < msg.energies.length ? msg.energies[msg.lumoIndex]! : NaN;
     const gap = Number.isFinite(eH) && Number.isFinite(eL) ? (eL - eH).toFixed(2) : "—";
@@ -1055,19 +1134,13 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     return;
   }
   if (msg.type === "orb-progress") {
-    if (msg.epoch !== orbEpoch) return; // stale grid progress
     setOrbStatus(`evaluating ψ on grid… ${msg.done}/${msg.total} slabs`);
     return;
   }
   if (msg.type === "orb-grid-done") {
-    if (msg.epoch !== orbEpoch) return; // stale: molecule changed mid-grid
     demo.orbComputing = false;
     applyOrbMeshes(msg);
-    refreshOrbButton();
-    btnOptimize.disabled = !demo.coverageOK;
-    btnPerturb.disabled = !demo.coverageOK;
-    molSelect.disabled = false;
-    btnLoadSmiles.disabled = false;
+    restoreIdleControls();
     const occ = demo.orbSelected !== null ? demo.orbOccupations[demo.orbSelected] ?? 0 : 0;
     const label = orbLabel(msg.orbitalIndex);
     setOrbStatus(
@@ -1079,16 +1152,15 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
     return;
   }
   if (msg.type === "error") {
+    // Stale-op errors were already dropped by the epoch gate at the top; an
+    // error that reaches here belongs to the current geometry (or is an
+    // epoch-less "init" failure). Whichever op failed, clear ALL busy flags and
+    // restore a fully usable UI so nothing is left stuck disabled.
     demo.error = msg.message;
     demo.optimizing = false;
     demo.vibComputing = false;
     demo.orbComputing = false;
-    btnOptimize.disabled = !demo.coverageOK;
-    btnPerturb.disabled = !demo.coverageOK;
-    btnLoadSmiles.disabled = false;
-    btnVibrations.disabled = !(demo.ready && demo.coverageOK && demo.atomCount >= 2);
-    molSelect.disabled = false;
-    refreshOrbButton();
+    restoreIdleControls();
     setStatus(`error: ${msg.message}`, "warn");
     setVibStatus(`error: ${msg.message}`, "warn");
     if (demo.orbReady || msg.message.includes("orbital")) setOrbStatus(`error: ${msg.message}`, "warn");
@@ -1107,12 +1179,7 @@ function beginRelaxUI(statusText: string): void {
   demo.done = false;
   demo.energies = [];
   drawPlot([]);
-  btnOptimize.disabled = true;
-  btnPerturb.disabled = true;
-  btnLoadSmiles.disabled = true;
-  btnVibrations.disabled = true;
-  btnOrbitals.disabled = true;
-  molSelect.disabled = true;
+  lockControlsForCompute();
   const t0 = performance.now();
   rElapsed.textContent = "…";
   setStatus(statusText);
@@ -1133,6 +1200,7 @@ function optimize(opts: { embedding?: boolean } = {}): void {
     symbols,
     positions: Array.from(currentPositions),
     options: fireOptions(symbols.length),
+    epoch: geomEpoch,
   });
 }
 
@@ -1156,6 +1224,7 @@ function embed(embedSymbols: string[], base: ArrayLike<number>, bonds: readonly 
     seeds,
     bonds: bonds.map((b) => ({ i: b.i, j: b.j, order: b.order })),
     options: fireOptions(embedSymbols.length),
+    epoch: geomEpoch,
   });
 }
 
@@ -1178,9 +1247,12 @@ function refreshVibButton(): void {
   btnVibrations.disabled = !vibAllowed();
 }
 
-/** Clear any computed modes/animation (called when the geometry changes). */
+/** Clear any computed modes/animation (called when the geometry changes). Also
+ * clears demo.vibComputing: a geometry change abandons any in-flight Hessian
+ * (its vib-done will be dropped as stale, so nothing else will clear the flag). */
 function resetVibrations(): void {
   stopVibAnimation();
+  demo.vibComputing = false;
   demo.vibReady = false;
   demo.vibFrequencies = [];
   demo.vibSelectedMode = null;
@@ -1199,18 +1271,14 @@ function computeVibrations(): void {
   if (!vibAllowed()) return;
   resetVibrations();
   resetOrbitals(); // the worker may relax first -> any orbitals become stale
-  demo.vibComputing = true;
-  btnVibrations.disabled = true;
-  btnOptimize.disabled = true;
-  btnPerturb.disabled = true;
-  btnOrbitals.disabled = true;
-  molSelect.disabled = true;
-  btnLoadSmiles.disabled = true;
+  demo.vibComputing = true; // set AFTER resetVibrations (which clears it)
+  lockControlsForCompute();
   setVibStatus("computing Hessian (6N force evals, off-thread)…");
   worker.postMessage({
     type: "vibrations",
     symbols,
     positions: Array.from(currentPositions),
+    epoch: geomEpoch,
   });
 }
 
@@ -1385,10 +1453,12 @@ function clearOrbMeshes(): void {
   demo.orbMeshVisible = false;
 }
 
-/** Clear all orbital state + meshes (called on any geometry change). Bumps the
- * epoch so any in-flight worker orbital response is recognised as stale. */
+/** Clear all orbital state + meshes. Called on any geometry change (via
+ * resetForNewGeometry, which owns the epoch bump) and whenever motion
+ * invalidates a computed set (relaxation start, vib-done adopting a relaxed
+ * equilibrium). Clears demo.orbComputing: an abandoned solve/grid's reply is
+ * dropped as stale, so nothing else would clear the flag. */
 function resetOrbitals(): void {
-  orbEpoch++; // invalidate in-flight worker responses for the old geometry
   clearOrbMeshes();
   compileTracer(); // static-mesh set changed -> re-bake the tracer BVH
   demo.orbComputing = false; // a geometry change cancels any pending orbital work
@@ -1411,15 +1481,15 @@ function resetOrbitals(): void {
 /** Kick off an extended-Hückel MO computation in the worker. */
 function computeOrbitals(): void {
   if (!orbAllowed()) return;
-  resetOrbitals(); // bumps orbEpoch; the request below carries the fresh value
-  demo.orbComputing = true;
-  btnOrbitals.disabled = true;
+  resetOrbitals(); // clears prior orbital state; the request carries the current epoch
+  demo.orbComputing = true; // set AFTER resetOrbitals (which clears it)
+  lockControlsForCompute();
   setOrbStatus("solving extended Hückel MOs…");
   worker.postMessage({
     type: "orbitals",
     symbols,
     positions: Array.from(currentPositions),
-    epoch: orbEpoch,
+    epoch: geomEpoch,
   });
 }
 
@@ -1676,9 +1746,9 @@ function selectOrbital(i: number): void {
 /** Ask the worker to evaluate psi(orbital) on a grid and isosurface it. */
 function requestOrbitalGrid(i: number): void {
   demo.orbComputing = true;
-  btnOrbitals.disabled = true;
+  lockControlsForCompute();
   setOrbStatus(`evaluating ψ for ${orbLabel(i)}…`);
-  worker.postMessage({ type: "orbital-grid", orbitalIndex: i, isovalue: demo.orbIsovalue, epoch: orbEpoch });
+  worker.postMessage({ type: "orbital-grid", orbitalIndex: i, isovalue: demo.orbIsovalue, epoch: geomEpoch });
 }
 
 /** Build a THREE.BufferGeometry from a worker isosurface payload. */
@@ -1904,6 +1974,26 @@ function clearSketch(): void {
     posVisible: orbPosMesh ? orbPosMesh.visible : false,
     negVisible: orbNegMesh ? orbNegMesh.visible : false,
   }),
+};
+
+// Headless-verification handle for the click-to-measure flow: toggle/clear the
+// selection by atom index (the exact code path a canvas click runs, via
+// toggleAtom) so the state-fuzz bench can exercise selection/markers without
+// synthesizing screen-space raycasts.
+(window as unknown as {
+  __measure: {
+    toggle: (i: number) => void;
+    clear: () => void;
+    selected: () => number[];
+    atomMeshCount: () => number;
+  };
+}).__measure = {
+  toggle: (i: number) => {
+    if (i >= 0 && i < symbols.length) toggleAtom(i);
+  },
+  clear: clearSelection,
+  selected: () => demo.selected.slice(),
+  atomMeshCount: () => (view ? view.atomMeshes.length : 0),
 };
 
 // ---------------------------------------------------------------------------

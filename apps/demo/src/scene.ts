@@ -126,6 +126,9 @@ export class MoleculeView {
       const el = symbols[i]!;
       const mesh = new THREE.Mesh(sphereGeo, materialFor(CPK_COLORS[el] ?? DEFAULT_COLOR));
       mesh.scale.setScalar(ATOM_RADII[el] ?? DEFAULT_RADIUS);
+      // Tagged so headless harnesses can count atom spheres in the scene graph
+      // (and tell them apart from bond cylinders, markers, and orbital lobes).
+      mesh.name = "atom";
       this.atomMeshes.push(mesh);
       this.group.add(mesh);
     }
@@ -142,7 +145,9 @@ export class MoleculeView {
             : [0]; // single or aromatic -> one clean stick
       for (const offset of offsets) {
         this.bondCyls.push({ i, j, offset });
-        this.bondMeshes.push(new THREE.Mesh(cylGeo, bondMat));
+        const bm = new THREE.Mesh(cylGeo, bondMat);
+        bm.name = "bond";
+        this.bondMeshes.push(bm);
       }
     };
 
