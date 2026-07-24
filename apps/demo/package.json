@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "fuzz": "node tools/fuzz.mjs",
-    "interleave": "node tools/interleave.mjs"
+    "interleave": "node tools/interleave.mjs",
+    "bootwindow": "node tools/bootwindow.mjs"
   },
   "dependencies": {
     "@browser-comp-chem/engine": "*",

@@ -173,6 +173,34 @@ const demo: DemoState = {
 let geomEpoch = 0;
 
 /**
+ * A 3D embed that could not be started because the ANI-2x weights were still
+ * downloading, held until the "ready" reply lands.
+ *
+ * The boot window is real and it is the FIRST thing a cold visitor hits: the
+ * dropdown and Load stay enabled while ~26 MB of weights stream in (nothing has
+ * locked them -- no compute is running), so a SMILES typed in those seconds took
+ * the not-ready branch of loadCustomMolecule, which showed RDKit's
+ * planarity-broken 2D seed and queued nothing. "ready" then overwrote the status
+ * with "model ready — …", and the molecule stayed a flat cartoon forever with no
+ * surviving hint to press Optimize. Remembering the embed here is what closes
+ * that gap; the ready handler is the only consumer.
+ *
+ * `epoch` is the geometry epoch this embed belongs to. It is a BACKSTOP, not the
+ * primary guard: the primary guard is that resetForNewGeometry() -- the one path
+ * a geometry change goes through -- clears this field outright, so a preset
+ * switch or a perturb during the download drops it. The epoch comparison catches
+ * any future path that replaces the geometry without coming through there.
+ * Only the custom SMILES/sketch path ever sets this: the built-in presets are
+ * baked equilibrium geometries and need no embedding at all.
+ */
+let pendingEmbed: {
+  symbols: string[];
+  seed: number[]; // RDKit's 2D-derived seed; embed3d only falls back to it
+  bonds: readonly Bond[];
+  epoch: number;
+} | null = null;
+
+/**
  * Set true immediately after the optimizer Worker is constructed (see the Worker
  * wiring section). resetForNewGeometry posts an "abandon" message and, being a
  * hoisted function declaration, could in principle be reached before the `const
@@ -624,6 +652,12 @@ function restoreIdleControls(): void {
  */
 function resetForNewGeometry(opts: { keepSelection?: boolean } = {}): void {
   geomEpoch++; // invalidate every in-flight worker reply for the old geometry
+  // A deferred embed belongs to the geometry being replaced; auto-starting it
+  // later would relax a molecule the user has already navigated away from. This
+  // is the PRIMARY single-shot guard (loadCustomMolecule re-arms it immediately
+  // afterwards for the geometry it is installing); the epoch stamped on the
+  // record is the backstop.
+  pendingEmbed = null;
   // Tell the worker too. Dropping the reply here is not enough: the worker's own
   // staleness guard only learns about a new epoch when a message arrives, and a
   // preset switch or a perturb changes the geometry while posting NO compute
@@ -778,8 +812,13 @@ async function loadCustomMolecule(smiles: string): Promise<void> {
       embed(seed.symbols, seed.positions, seed.bonds);
     } else {
       // Model not up yet: show the geometry, restore idle controls (Optimize/
-      // Perturb stay off until 'ready'; orbitals are model-free so they enable).
-      setStatus("model still loading — press Optimize once the model is ready…");
+      // Perturb stay off until 'ready'; orbitals are model-free so they enable),
+      // and REMEMBER the embed so the "ready" handler starts it the moment the
+      // weights land. The epoch is the one setGeometry() just installed above.
+      // Telling the user to press Optimize is not enough: 'ready' overwrites the
+      // status a few seconds later and the instruction disappears with it.
+      pendingEmbed = { symbols: seed.symbols, seed: seed.positions, bonds: seed.bonds, epoch: geomEpoch };
+      setStatus("model still loading — 3D embedding will start automatically…");
       restoreIdleControls();
     }
   } catch (err) {
@@ -1051,6 +1090,32 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
   if (typeof msgEpoch === "number" && msgEpoch !== geomEpoch) return;
   if (msg.type === "ready") {
     demo.ready = true;
+    // Take the deferred embed unconditionally, then decide whether to run it:
+    // consuming it even when it turns out to be unrunnable is what makes this
+    // single-shot, so no later event can resurrect a molecule the user has moved
+    // on from. Three ways it does NOT run:
+    //   - stale geometry (epoch moved): the user switched molecules or perturbed
+    //     while the weights streamed in -- embedding now would yank the geometry
+    //     out from under what they are actually looking at;
+    //   - coverage: elements outside ANI-2x have no energies at all, and that
+    //     path deliberately shows structure-only with Optimize disabled;
+    //   - something is already busy: an orbital solve needs no model, so it CAN
+    //     be started (and can still be running) during the download, and a second
+    //     Load may be mid-parse -- in both cases the running work owns the UI.
+    // Anything the user started through beginRelaxUI (a manual Optimize) has
+    // already cleared this field there, which is the guard the epoch cannot be:
+    // optimize() deliberately does not bump the epoch, so an epoch check alone
+    // would happily embed on top of a relaxation the user asked for by hand.
+    const pending = pendingEmbed;
+    pendingEmbed = null;
+    const busy = demo.optimizing || demo.loading || demo.vibComputing || demo.orbComputing || demo.irComputing;
+    if (pending && pending.epoch === geomEpoch && demo.coverageOK && !busy) {
+      // embed() -> beginRelaxUI() locks the controls and sets its own "embedding
+      // 3D geometry…" status, so deliberately do NOT restore/overwrite here: the
+      // user must see the work start, not "model ready" over a still-flat seed.
+      embed(pending.symbols, pending.seed, pending.bonds);
+      return;
+    }
     restoreIdleControls();
     setStatus(`model ready — ${msg.variant}, ${msg.members} members`, "good");
     return;
@@ -1272,6 +1337,16 @@ worker.onmessage = (ev: MessageEvent<WorkerMsg>) => {
  * the live elapsed ticker (main-thread, proves the numerics don't block).
  */
 function beginRelaxUI(statusText: string): void {
+  // A relaxation the user started by hand supersedes any embed deferred during
+  // the model download, and this is the ONLY guard that can say so: optimize()
+  // runs on the current geometry and deliberately does not bump the epoch, so
+  // the "ready" handler's epoch check would happily embed on top of a manual
+  // Optimize -- throwing the just-relaxed geometry away and re-running the work.
+  // Today the button is disabled and optimize() early-returns while !demo.ready,
+  // so that ordering cannot actually occur; clearing here is what keeps the
+  // invariant true if the pre-ready gating is ever loosened (a keyboard shortcut,
+  // an enabled button) rather than leaving it resting on the button state.
+  pendingEmbed = null;
   resetVibrations(); // geometry is about to move; any modes become stale
   resetOrbitals(); // ...and any computed orbitals
   resetIR(); // ...and any computed IR spectrum
