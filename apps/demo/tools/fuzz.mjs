@@ -115,6 +115,25 @@ async function main() {
           if (o.name === "atom" && o.visible) atomMeshes++;
         });
       }
+      // Closest pair of atoms, in Angstrom (computed page-side: O(N^2) over a
+      // few dozen atoms is far cheaper here than shipping every geometry over
+      // CDP). -1 when there is no pair to measure.
+      let minDist = -1;
+      let minPair = null;
+      const p = d.positions;
+      const na = d.symbols.length;
+      for (let i = 0; i < na; i++) {
+        for (let j = i + 1; j < na; j++) {
+          const dx = p[3 * i] - p[3 * j];
+          const dy = p[3 * i + 1] - p[3 * j + 1];
+          const dz = p[3 * i + 2] - p[3 * j + 2];
+          const r = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (minDist < 0 || r < minDist) {
+            minDist = r;
+            minPair = [i, j, d.symbols[i], d.symbols[j]];
+          }
+        }
+      }
       const molEl = document.getElementById("mol");
       return {
         webgl: d.webgl,
@@ -139,6 +158,8 @@ async function main() {
         orbEnergiesLen: d.orbEnergies.length,
         irModesLen: d.irModes.length,
         atomMeshes,
+        minDist,
+        minPair,
         dis: {
           mol: dis("mol"),
           load: dis("load-smiles"),
@@ -199,8 +220,40 @@ async function main() {
     }
   }
 
+  /**
+   * Minimum allowed interatomic distance, in Angstrom, for a SETTLED geometry.
+   * 0.6 A is comfortably below any real bonded distance -- the shortest bond
+   * chemistry offers is H-H in H2 at 0.74 A, and C-H is about 1.09 A -- so this
+   * flags only genuine collapse or interpenetration (atoms passed through each
+   * other, a stale reply pasted onto the wrong molecule, a NaN-adjacent
+   * geometry), never a legitimately compressed bond. Headroom measured on the
+   * geometries this fuzz actually visits: the tightest settled pair over all
+   * five presets and the SMILES pool is 0.97 A, and the tightest after a
+   * Perturb is 0.83 A (aspirin) -- so no false positives, and the fixed perturb
+   * seed makes that deterministic.
+   *
+   * Deliberately checked ONLY at settle, never in cheapCheck: while an embed is
+   * in flight the app is SUPPOSED to be displaying RDKit's raw 2D seed.
+   *
+   * KNOWN LIMIT: this does NOT detect "still showing the flat 2D seed". RDKit's
+   * 2D layout is planar but not collapsed -- measured min pairwise distance
+   * 1.50 A for naphthalene, 1.42 A for aspirin -- so it clears 0.6 A easily. A
+   * planarity test would not work either: naphthalene and benzene are genuinely
+   * planar. Head-of-line blocking is caught by tools/interleave.mjs instead;
+   * this invariant covers the physical-nonsense half that the state-flag
+   * assertions above cannot see.
+   */
+  const MIN_ATOM_DISTANCE = 0.6;
+
   function settleCheck(s, when) {
     if (!settled(s)) throw new InvariantError(`flags not settled after ${when}: ${JSON.stringify(pickFlags(s))}`);
+    if (s.minDist >= 0 && s.minDist < MIN_ATOM_DISTANCE) {
+      const [i, j, si, sj] = s.minPair;
+      throw new InvariantError(
+        `atoms collapsed after ${when}: ${si}${i}-${sj}${j} are ${s.minDist.toFixed(3)} A apart ` +
+          `(< ${MIN_ATOM_DISTANCE} A; shortest real bond H-H is 0.74 A) — geometry is not physical`,
+      );
+    }
     const canRelax = s.ready && s.coverageOK;
     const expectEnabled = [];
     if (canRelax && s.dis.optimize) expectEnabled.push("optimize");

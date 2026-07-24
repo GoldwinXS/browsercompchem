@@ -13,6 +13,8 @@
  *   { type: "orbitals", symbols, positions: number[], epoch }
  *   { type: "orbital-grid", orbitalIndex, isovalue, epoch }
  *   { type: "irspectrum", symbols, positions: number[], epoch }
+ *   { type: "abandon", epoch }                      (no reply; see COOPERATIVE
+ *                                                    CANCELLATION below)
  *
  * Protocol (worker -> main):
  *   { type: "ready", variant, members }                                (epoch-independent)
@@ -31,6 +33,28 @@
  * tracks the highest epoch it has seen (`latestEpoch`) so a slow reply from an
  * abandoned geometry cannot overwrite the cached orbital solve a newer geometry
  * depends on. "init"/"ready" model-loading messages are epoch-independent.
+ *
+ * COOPERATIVE CANCELLATION. Dropping a stale reply on the main thread is not
+ * enough: the ANI-2x provider's energyForces() is `async` but does no real I/O
+ * (synchronous math wrapped in a promise), so an optimize/Hessian resolves
+ * entirely through MICROtasks -- and a worker only dispatches `message` events as
+ * MACROtasks. Without a real yield, `self.onmessage` cannot run again until the
+ * current op has finished, so a molecule the user selects mid-computation sits
+ * frozen at its raw seed until the ABANDONED op finishes grinding (measured:
+ * 1219 ms -> 12805 ms for the same water optimize). Two pieces fix that:
+ *   - CooperativeProvider wraps the provider for every op that evaluates
+ *     energies/forces, yielding a real macrotask every YIELD_EVERY evaluations
+ *     (so queued messages are dispatched) and throwing AbandonedGeometryError as
+ *     soon as its epoch falls behind `latestEpoch`. That error is swallowed at
+ *     the top level: an abandoned op posts nothing at all.
+ *   - The main thread posts { type: "abandon", epoch } from resetForNewGeometry,
+ *     because a geometry change is not always accompanied by a new request --
+ *     switching to a built-in preset bumps the epoch and posts no compute at all,
+ *     and `latestEpoch` would otherwise never learn the old op is pointless.
+ * Suppressing a reply is always safe: the worker only bails when its epoch is
+ * behind `latestEpoch`, and `latestEpoch` only ever holds an epoch the main
+ * thread itself sent, so a suppressed reply is exactly one the main thread's
+ * stale-reply gate would have dropped.
  *
  * The trick that lets us reuse the engine's real FireOptimizer unchanged: we
  * wrap the provider so every energy/force evaluation (one per FIRE step, at the
@@ -95,33 +119,110 @@ function maxAbs(a: Float64Array): number {
 }
 
 /**
- * EnergyForceProvider that delegates to the real ANI-2x provider but posts a
- * per-step message on each evaluation. Counts evaluations as FIRE steps.
+ * Energy/force evaluations between macrotask yields.
+ *
+ * The tradeoff: a yield is what lets a queued message (a new request, or an
+ * "abandon") be dispatched at all, so it bounds worst-case cancellation latency
+ * at YIELD_EVERY evaluations; but each yield costs an event-loop turn on top of
+ * the evaluation. An ANI-2x evaluation is expensive next to a MessageChannel
+ * bounce -- measured here: 18 ms/evaluation for water (3 atoms, 65 evaluations
+ * per perturbed optimize), 102 ms/evaluation for naphthalene (18 atoms) -- so
+ * the overhead is unmeasurable either way. From-idle wall time for the same
+ * perturbed-water optimize (apps/demo/tools/interleave.mjs, two runs each):
+ *   no yielding (pre-fix)  1286 ms
+ *   YIELD_EVERY=1          1253 / 1151 ms
+ *   YIELD_EVERY=4          1185 / 1184 ms   <- chosen; interleaved ratio 0.97x
+ * All three sit inside the same ~100 ms run-to-run noise band. 4 is therefore
+ * picked for margin, not speed: it keeps the per-yield cost under a fraction of
+ * a percent even if evaluations ever get much cheaper, while still noticing an
+ * abandonment within 4 evaluations (~70 ms on water, ~0.4 s on the 18-atom
+ * worst case) -- fast enough that the interleave bench cannot distinguish an
+ * optimize requested mid-abandonment from one requested at idle.
  */
-class ReportingProvider implements EnergyForceProvider {
-  readonly name = "ani2x-reporting";
+const YIELD_EVERY = 4;
+
+/**
+ * One module-level MessageChannel used as an unclamped macrotask trampoline, with
+ * a FIFO of pending resolvers (a channel per yield would allocate thousands of
+ * ports per optimization). setTimeout(0) will NOT do: nested timers are clamped
+ * to ~4 ms, which on a 6N-evaluation Hessian would add hundreds of milliseconds;
+ * a MessageChannel bounce is ~0.1 ms and unclamped. Each postMessage on port2
+ * delivers exactly one message to port1, which wakes exactly one waiter, so the
+ * queue and the resolver list stay in lockstep even with two ops interleaved.
+ */
+const yieldChannel = new MessageChannel();
+const yieldWaiters: (() => void)[] = [];
+yieldChannel.port1.onmessage = () => {
+  yieldWaiters.shift()?.();
+};
+function yieldToEventLoop(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    yieldWaiters.push(resolve);
+    yieldChannel.port2.postMessage(0);
+  });
+}
+
+/**
+ * Thrown by CooperativeProvider when the geometry its op belongs to has been
+ * abandoned. Unwinds whatever engine code is running (FIRE, the finite-difference
+ * Hessian) and is swallowed at the top level -- an abandoned op posts nothing.
+ */
+class AbandonedGeometryError extends Error {}
+
+/**
+ * EnergyForceProvider wrapper used by EVERY op that evaluates energies/forces.
+ * It does three things the bare provider cannot:
+ *   - yields a real macrotask every YIELD_EVERY evaluations, so messages queued
+ *     for this worker actually get dispatched mid-op;
+ *   - aborts the op (AbandonedGeometryError) as soon as its geometry epoch falls
+ *     behind the newest epoch the worker has seen;
+ *   - optionally posts the {type:"step"} progress message the UI animates from
+ *     (optimize/embed want it; the Hessian paths report progress per force
+ *     column instead and would only fight the renderer with per-evaluation
+ *     geometry updates).
+ * Evaluations are counted as FIRE steps, exactly as before.
+ */
+class CooperativeProvider implements EnergyForceProvider {
+  readonly name = "ani2x-cooperative";
   private step = 0;
+  private evaluations = 0;
+  private readonly reportSteps: boolean;
+
   constructor(
-    private readonly inner: Ani2xProvider,
+    private readonly inner: EnergyForceProvider,
     private readonly epoch: number,
-  ) {}
+    opts: { reportSteps?: boolean } = {},
+  ) {
+    this.reportSteps = opts.reportSteps ?? false;
+  }
 
   async energyForces(mol: Molecule): Promise<EnergyForces> {
+    this.evaluations += 1;
+    if (this.evaluations % YIELD_EVERY === 0) await yieldToEventLoop();
+    // Checked AFTER the yield: the yield is what allows a newer request (or an
+    // "abandon") to be dispatched and raise `latestEpoch` in the first place.
+    if (this.epoch < latestEpoch) {
+      throw new AbandonedGeometryError(
+        `geometry epoch ${this.epoch} abandoned (latest ${latestEpoch})`,
+      );
+    }
     const res = await this.inner.energyForces(mol);
-    const maxForce = maxAbs(res.forces);
-    // Transferable snapshot of the geometry that produced this energy.
-    const pos = new Float32Array(mol.positions.length);
-    for (let i = 0; i < pos.length; i++) pos[i] = mol.positions[i]!;
-    const msg = {
-      type: "step" as const,
-      step: this.step,
-      energy: res.energy,
-      maxForce,
-      positions: pos,
-      epoch: this.epoch,
-    };
-    (self as unknown as Worker).postMessage(msg, [pos.buffer]);
-    this.step += 1;
+    if (this.reportSteps) {
+      const maxForce = maxAbs(res.forces);
+      // Transferable snapshot of the geometry that produced this energy.
+      const pos = new Float32Array(mol.positions.length);
+      for (let i = 0; i < pos.length; i++) pos[i] = mol.positions[i]!;
+      const msg = {
+        type: "step" as const,
+        step: this.step,
+        energy: res.energy,
+        maxForce,
+        positions: pos,
+        epoch: this.epoch,
+      };
+      (self as unknown as Worker).postMessage(msg, [pos.buffer]);
+      this.step += 1;
+    }
     return res;
   }
 }
@@ -167,12 +268,18 @@ self.onmessage = async (ev: MessageEvent) => {
         isovalue: number;
         epoch: number;
       }
-    | { type: "irspectrum"; symbols: string[]; positions: number[]; epoch: number };
+    | { type: "irspectrum"; symbols: string[]; positions: number[]; epoch: number }
+    /** Pure staleness signal: the main thread replaced the geometry without
+     * requesting anything new (preset switch, perturb). Raises `latestEpoch` so
+     * an in-flight op can notice it has been abandoned; produces no reply. */
+    | { type: "abandon"; epoch: number };
 
   // The geometry epoch of this request (undefined only for "init"). Echoed on
   // every reply and used in the catch so even an error respects staleness.
   const epoch = "epoch" in data ? data.epoch : undefined;
   if (epoch !== undefined && epoch > latestEpoch) latestEpoch = epoch;
+  // "abandon" carries no work: recording the epoch above was the whole point.
+  if (data.type === "abandon") return;
 
   try {
     if (data.type === "init") {
@@ -197,7 +304,7 @@ self.onmessage = async (ev: MessageEvent) => {
         charge: 0,
         multiplicity: 1,
       };
-      const reporting = new ReportingProvider(provider, data.epoch);
+      const reporting = new CooperativeProvider(provider, data.epoch, { reportSteps: true });
       const fire = new FireOptimizer({
         forceTolerance: data.options.forceTolerance,
         maxSteps: data.options.maxSteps,
@@ -228,7 +335,7 @@ self.onmessage = async (ev: MessageEvent) => {
 
     if (data.type === "embed") {
       if (!provider) throw new Error("optimizer worker: model not initialized");
-      const reporting = new ReportingProvider(provider, data.epoch);
+      const reporting = new CooperativeProvider(provider, data.epoch, { reportSteps: true });
       const t0 = performance.now();
 
       // Topology-aware classical pre-relax (see @browser-comp-chem/engine's
@@ -247,6 +354,15 @@ self.onmessage = async (ev: MessageEvent) => {
       let seedPositions: Float64Array;
       if (data.bonds.length > 0 && data.symbols.length > 1) {
         const embedded = await embed3d(data.symbols, data.bonds);
+        // embed3d is a multi-start classical relax with no progress hook, so it
+        // offers CooperativeProvider no chance to notice an abandonment while it
+        // runs. Check on the way out: with the geometry already replaced, the
+        // ANI-2x polish below would be pure waste.
+        if (data.epoch < latestEpoch) {
+          throw new AbandonedGeometryError(
+            `geometry epoch ${data.epoch} abandoned during embed3d (latest ${latestEpoch})`,
+          );
+        }
         seedPositions = embedded.positions;
         if (!embedded.valid) {
           // Every classical-relax attempt was flagged by the validity gate --
@@ -303,9 +419,15 @@ self.onmessage = async (ev: MessageEvent) => {
 
       const t0 = performance.now();
 
+      // The longest-blocking op in the worker (a 6N-evaluation Hessian on top of
+      // a full relax), so it is the one that most needs the cooperative wrapper.
+      // reportSteps is off: the UI shows force-column progress for this op, and
+      // per-evaluation geometry updates would fight the mode animation.
+      const coop = new CooperativeProvider(provider, data.epoch);
+
       // Verify we're at (or near) a stationary point; the Hessian is only
       // meaningful there. If the forces are too large, relax first with FIRE.
-      let maxForce = maxAbs((await provider.energyForces(mol)).forces);
+      let maxForce = maxAbs((await coop.energyForces(mol)).forces);
       let relaxed = false;
       if (maxForce >= STATIONARY_THRESHOLD) {
         const fire = new FireOptimizer({
@@ -314,7 +436,7 @@ self.onmessage = async (ev: MessageEvent) => {
           dtMax: 0.2,
           maxStep: 0.1,
         });
-        const r = await fire.optimize(mol, provider);
+        const r = await fire.optimize(mol, coop);
         mol = r.molecule;
         maxForce = r.maxForce;
         relaxed = true;
@@ -323,7 +445,7 @@ self.onmessage = async (ev: MessageEvent) => {
       // 6N analytic-force evaluations; stream Hessian-column progress so the UI
       // can show a bar. Never blocks the main thread (this is the worker).
       const n3 = mol.positions.length;
-      const nm = await computeNormalModes(mol, provider, {
+      const nm = await computeNormalModes(mol, coop, {
         onProgress: (done, total) => {
           (self as unknown as Worker).postMessage({
             type: "vib-progress",
@@ -381,7 +503,11 @@ self.onmessage = async (ev: MessageEvent) => {
 
       const t0 = performance.now();
 
-      let maxForce = maxAbs((await provider.energyForces(mol)).forces);
+      // Same Hessian cost as "vibrations" -- same cooperative wrapper, same
+      // reason (see there); reportSteps off for the same reason too.
+      const coop = new CooperativeProvider(provider, data.epoch);
+
+      let maxForce = maxAbs((await coop.energyForces(mol)).forces);
       let relaxed = false;
       if (maxForce >= STATIONARY_THRESHOLD) {
         const fire = new FireOptimizer({
@@ -390,13 +516,13 @@ self.onmessage = async (ev: MessageEvent) => {
           dtMax: 0.2,
           maxStep: 0.1,
         });
-        const r = await fire.optimize(mol, provider);
+        const r = await fire.optimize(mol, coop);
         mol = r.molecule;
         maxForce = r.maxForce;
         relaxed = true;
       }
 
-      const nm = await computeNormalModes(mol, provider, {
+      const nm = await computeNormalModes(mol, coop, {
         onProgress: (done, total) => {
           (self as unknown as Worker).postMessage({
             type: "ir-progress",
@@ -557,6 +683,12 @@ self.onmessage = async (ev: MessageEvent) => {
       return;
     }
   } catch (err) {
+    // An abandoned op is an intentional bail-out, not a failure: the geometry it
+    // was computing no longer exists on the main thread, which has already
+    // cleared its own busy flags for it (resetForNewGeometry). Post NOTHING --
+    // an "error" reply for a stale epoch would be dropped by the main thread's
+    // gate anyway, and one for a live epoch would be a lie.
+    if (err instanceof AbandonedGeometryError) return;
     (self as unknown as Worker).postMessage({
       type: "error",
       message: err instanceof Error ? err.message : String(err),

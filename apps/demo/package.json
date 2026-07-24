@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "fuzz": "node tools/fuzz.mjs"
+    "fuzz": "node tools/fuzz.mjs",
+    "interleave": "node tools/interleave.mjs"
   },
   "dependencies": {
     "@browser-comp-chem/engine": "*",

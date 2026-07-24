@@ -172,6 +172,19 @@ const demo: DemoState = {
  */
 let geomEpoch = 0;
 
+/**
+ * Set true immediately after the optimizer Worker is constructed (see the Worker
+ * wiring section). resetForNewGeometry posts an "abandon" message and, being a
+ * hoisted function declaration, could in principle be reached before the `const
+ * worker` binding below is initialized -- which would be a TDZ ReferenceError,
+ * not a silent no-op. Verified today: the earliest call is boot() ->
+ * loadMolecule(), and boot() is invoked at the very BOTTOM of this module, long
+ * after the worker exists. The flag is kept anyway so that if the boot order is
+ * ever rearranged, the worst case is one missed abandon hint (the epoch gate
+ * still protects correctness) instead of a dead app.
+ */
+let workerConstructed = false;
+
 /** Elements the extended-Hückel tier can parametrize (same set as ANI-2x). */
 const EHT_SET = new Set(EHT_SUPPORTED_ELEMENTS);
 
@@ -611,6 +624,14 @@ function restoreIdleControls(): void {
  */
 function resetForNewGeometry(opts: { keepSelection?: boolean } = {}): void {
   geomEpoch++; // invalidate every in-flight worker reply for the old geometry
+  // Tell the worker too. Dropping the reply here is not enough: the worker's own
+  // staleness guard only learns about a new epoch when a message arrives, and a
+  // preset switch or a perturb changes the geometry while posting NO compute
+  // request at all -- so without this hint an abandoned op would grind to
+  // completion and head-of-line-block whatever the user does next. Carries the
+  // post-increment epoch, so it always precedes (and never cancels) a request
+  // this same geometry is about to make.
+  if (workerConstructed) worker.postMessage({ type: "abandon", epoch: geomEpoch });
   demo.optimizing = false; // abandon any relaxation streaming for the old geometry
   setWarn("");
   if (!opts.keepSelection) clearSelection();
@@ -933,6 +954,7 @@ function pickAtom(clientX: number, clientY: number): number {
 const worker = new Worker(new URL("./optimizer.worker.ts", import.meta.url), {
   type: "module",
 });
+workerConstructed = true; // resetForNewGeometry may now post its "abandon" hint
 
 type StepMsg = { type: "step"; step: number; energy: number; maxForce: number; positions: Float32Array; epoch: number };
 type DoneMsg = { type: "done"; converged: boolean; energy: number; maxForce: number; steps: number; elapsedMs: number; positions: Float32Array; epoch: number };
